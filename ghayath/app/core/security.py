@@ -17,8 +17,7 @@ from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core import context
-from app.core.errors import AppError, authentication_failed, forbidden, invalid_token
-from app.generated import models
+from app.core.errors import forbidden, invalid_token
 
 _bearer = HTTPBearer(auto_error=False)
 

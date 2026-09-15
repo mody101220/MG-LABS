@@ -44,7 +44,7 @@ class EmailService:
             raise not_found("email message")
         return row
 
-    async def create_draft(self, principal: Principal, reply_to: str | None, to: str | None,
+    async def create_draft(self, principal: Principal | None, reply_to: str | None, to: str | None,
                            subject: str | None, body: str) -> dict:
         if not reply_to and not to:
             raise AppError(models.ErrorCode.VALIDATION_ERROR, "Exactly one of reply_to / to is required",
@@ -54,8 +54,13 @@ class EmailService:
             reply_row = await self._db.email.get_message(reply_to)
             if not reply_row:
                 raise not_found("email message")
-        recipient = to or reply_row["sender"]
-        final_subject = subject if (subject and not reply_to) else (f"Re: {reply_row['subject']}" if reply_to else subject)
+        if reply_row is not None:
+            recipient = to or reply_row["sender"]
+            final_subject: str | None = subject if (subject and not reply_to) else f"Re: {reply_row['subject']}"
+        else:
+            assert to is not None  # guaranteed above: exactly one of reply_to / to
+            recipient = to
+            final_subject = subject
         draft = await self._db.email.create_draft(new_id("draft"), reply_to, recipient, final_subject or "", body)
         await self._audit.log("EMAIL_DRAFT_CREATED", principal, "SUCCESS", "email_draft", draft["id"],
                               details={"reply_to": reply_to, "to": recipient})
@@ -76,7 +81,6 @@ class EmailService:
         if draft["status"] == "SENT":
             raise conflict("Draft already sent", {"draft_id": draft_id})
 
-        payload = {"draft_id": draft_id, "to": draft["to_addr"], "subject": draft["subject"], "body": draft["body"]}
         decision = await self._perms.check(principal, "EMAIL", "SEND", draft_id)
         needs_approval = _is_high_impact(draft) or (not decision.allowed and decision.requires_approval)
         if needs_approval:

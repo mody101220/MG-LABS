@@ -2,7 +2,6 @@
 Both perform REAL dependency checks — no hardcoded green."""
 from __future__ import annotations
 
-import pytest
 
 
 async def test_health_real_check(client):

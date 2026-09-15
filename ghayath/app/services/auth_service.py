@@ -9,8 +9,8 @@ import jwt
 
 from app.core import context
 from app.core.config import Settings
-from app.core.errors import authentication_failed, invalid_token
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.errors import AppError, authentication_failed, invalid_token
+from app.core.security import create_access_token, verify_password
 from app.generated import models
 from app.services.audit_service import AuditService
 from app.services.ids import new_id

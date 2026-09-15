@@ -48,7 +48,7 @@ class AgentBrain:
             row = await self._db.integrations.get(name)
             integrations[name] = {
                 # adapter health is authoritative (env-derived credentials)
-                "connected": bool(adapter) and adapter.health().state == "CONNECTED",
+                "connected": adapter is not None and adapter.health().state == "CONNECTED",
                 "permissions": (row or {}).get("permissions") or {},
             }
         memory_rows, _ = await self._db.memory.list(None, None, None, 1, 8)

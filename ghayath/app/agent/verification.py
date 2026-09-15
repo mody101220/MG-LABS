@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from app.core import context
 from app.core.errors import AppError
-from app.generated import models
 from app.services.ids import new_id
 
 

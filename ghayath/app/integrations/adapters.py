@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.core.config import Settings
-from app.core.errors import AppError, integration_offline, tool_unavailable
+from app.core.errors import integration_offline, tool_unavailable
 
 
 @dataclass
@@ -67,9 +67,10 @@ class WhatsAppAdapter(IntegrationAdapter):
         self.require_connected()
         if action != "send":
             raise tool_unavailable(f"whatsapp.{action}")
+        base = (self._settings.whatsapp_provider_base_url or "").rstrip("/")
         resp = await self._request(
             "POST",
-            f"{self._settings.whatsapp_provider_base_url.rstrip('/')}/messages",
+            f"{base}/messages",
             headers={"Authorization": f"Bearer {self._settings.whatsapp_provider_token}"},
             json={"recipient": params["recipient"], "message": params["message"]},
         )
@@ -91,9 +92,10 @@ class EmailAdapter(IntegrationAdapter):
         self.require_connected()
         if action != "send":
             raise tool_unavailable(f"email.{action}")
+        base = (self._settings.email_provider_base_url or "").rstrip("/")
         resp = await self._request(
             "POST",
-            f"{self._settings.email_provider_base_url.rstrip('/')}/send",
+            f"{base}/send",
             headers={"Authorization": f"Bearer {self._settings.email_provider_token}"},
             json={"to": params["to"], "subject": params.get("subject"), "body": params["body"]},
         )

@@ -8,7 +8,7 @@ from __future__ import annotations
 import httpx
 
 from app.core import context
-from app.core.errors import not_found, tool_unavailable
+from app.core.errors import not_found
 from app.core.security import Principal
 from app.services.audit_service import AuditService
 from app.services.ids import new_id

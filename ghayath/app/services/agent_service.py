@@ -71,7 +71,7 @@ class AgentService:
         if not cmd:
             raise not_found("command")
         if cmd["status"] not in ("PLANNED", "WAITING_APPROVAL"):
-            raise conflict(f"Command is not in PLANNED or WAITING_APPROVAL state",
+            raise conflict("Command is not in PLANNED or WAITING_APPROVAL state",
                            {"command_id": command_id, "status": cmd["status"]})
 
         granted_approval_id: str | None = None

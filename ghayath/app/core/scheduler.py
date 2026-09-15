@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 
 from app.core import context
 from app.core.errors import AppError
-from app.services.ids import new_id
 from croniter import croniter
 
 

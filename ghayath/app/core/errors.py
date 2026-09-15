@@ -91,11 +91,14 @@ def integration_offline(provider: str) -> AppError:
     )
 
 
-def tool_unavailable(tool: str) -> AppError:
+def tool_unavailable(tool: str, details: dict[str, Any] | None = None) -> AppError:
+    d: dict[str, Any] = {"tool": tool}
+    if details:
+        d.update(details)
     return AppError(
         models.ErrorCode.TOOL_UNAVAILABLE,
         f"Tool '{tool}' is not available right now",
-        {"tool": tool},
+        d,
     )
 
 

@@ -4,7 +4,6 @@ bits; there is NO mutation path in v1 (the agent cannot grant itself permissions
 from __future__ import annotations
 
 from app.core.security import Principal
-from app.generated import models
 
 
 class PermissionService:

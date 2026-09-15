@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import jwt
-import pytest
 
 from tests.conftest import AGENT_EMAIL, OWNER_EMAIL, VIEWER_EMAIL, bearer, unique_key
 

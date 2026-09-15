@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 import psycopg
 import pytest
 
@@ -30,6 +29,7 @@ async def test_migration_applies_cleanly_and_idempotently(pg):
     dsn = head[: head.rfind("/")] + "/ghayath_schema_test" + ("?" + query if query else "")
     pool = make_pool(dsn, pool_size=2)
     try:
+        await pool.open()
         await pool.wait()
         ran1 = await apply_migrations(pool)
         ran2 = await apply_migrations(pool)  # must be a no-op

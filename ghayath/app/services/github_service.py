@@ -2,9 +2,8 @@
 without credentials every call is explicitly INTEGRATION_OFFLINE (503)."""
 from __future__ import annotations
 
-from app.core.errors import AppError, not_found, validation_error
+from app.core.errors import not_found
 from app.core.security import Principal
-from app.generated import models
 from app.services.audit_service import AuditService
 from app.services.ids import new_id
 

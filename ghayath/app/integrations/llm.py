@@ -138,7 +138,8 @@ class OpenAICompatibleLLM:
                       messages=len(messages))
             return LLMResult(message.get("content"), message.get("tool_calls") or [],
                              usage, body.get("model", self._model), body)
-        raise last  # unreachable: loop always returns or raises
+        assert last is not None  # unreachable: loop always returns or raises
+        raise last
 
     @staticmethod
     def _ms(start: float) -> int:

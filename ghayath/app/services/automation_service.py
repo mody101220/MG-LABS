@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from croniter import croniter
 
 from app.core import context
-from app.core.errors import AppError, not_found, validation_error
+from app.core.errors import not_found, validation_error
 from app.core.security import Principal
 from app.services.audit_service import AuditService
 from app.services.events import EventBus

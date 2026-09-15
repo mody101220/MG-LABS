@@ -197,7 +197,6 @@ def test_security_levels_match(spec_ops, app_routes):
 def test_request_schemas_compatible(spec_ops, app_routes):
     """Every spec request field must exist on the implemented request model."""
     from app.api.v1 import agent as agent_mod  # noqa: F401
-    from app.generated import models
 
     # map (method, path) -> request model via operationId
     from app.main import create_app

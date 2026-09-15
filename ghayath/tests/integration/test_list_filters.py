@@ -7,7 +7,6 @@ values are rejected with the 400 VALIDATION_ERROR envelope.
 from __future__ import annotations
 
 import httpx
-import pytest
 
 from tests.conftest import OWNER_EMAIL, bearer
 

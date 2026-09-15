@@ -7,7 +7,6 @@ delivery goes through the adapter (explicitly fails when not connected/configure
 """
 from __future__ import annotations
 
-from app.core.errors import integration_offline
 from app.core.security import Principal
 from app.services.audit_service import AuditService
 from app.services.ids import new_id

@@ -21,7 +21,6 @@ from starlette.responses import JSONResponse, Response
 from app.core import context
 from app.core.envelope import error_payload
 from app.core.errors import rate_limited
-from app.generated import models
 
 AUTH_LIMIT = 5
 AGENT_LIMIT = 60
@@ -81,7 +80,7 @@ def make_store(settings) -> MemoryStore | RedisStore:
             return RedisStore(client)
         except Exception:
             # Fall back rather than break the API; health still reports redis down.
-            context.log_event("ratelimit.redis_unavailable", fallback="memory")
+            context.log_event("ratelimit.redis_unavailable", {"fallback": "memory"})
     return MemoryStore()
 
 

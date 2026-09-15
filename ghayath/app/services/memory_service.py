@@ -3,11 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.core.errors import AppError, forbidden, not_found
+from app.core.errors import forbidden, not_found
 from app.core.security import Principal
-from app.generated import models
 from app.services.audit_service import AuditService
-from app.services.ids import new_id
 
 
 class MemoryService:
@@ -32,7 +30,7 @@ class MemoryService:
         row = await self._db.memory.get(memory_id)
         if not row:
             raise not_found("memory record")
-        deleted = await self._db.memory.delete(memory_id)
+        await self._db.memory.delete(memory_id)
         await self._audit.log("MEMORY_DELETE", principal, "SUCCESS", "memory", memory_id,
                               project_id=row.get("project_id"),
                               details={"removed_record": {"type": row["type"], "key": row["key"], "value": row["value"]}})

@@ -238,7 +238,7 @@ class AgentCommandRequest(BaseModel):
     ]
     source: Annotated[
         Source | None, Field(description='Where the command came from.')
-    ] = 'dashboard'
+    ] = 'dashboard'  # type: ignore[assignment]  # generated: contract default is a string
     conversation_id: Annotated[
         ConversationId | None,
         Field(
@@ -482,7 +482,7 @@ class CreateTaskRequest(BaseModel):
     status: Annotated[
         TaskStatus | None,
         Field(description='Only TODO/IN_PROGRESS/BLOCKED allowed at creation.'),
-    ] = 'TODO'
+    ] = 'TODO'  # type: ignore[assignment]  # generated: contract default is a string
     assignee: str | None = None
     due_at: AwareDatetime | None = None
 
@@ -618,7 +618,7 @@ class CreateMemoryRequest(BaseModel):
     key: Annotated[str, Field(max_length=200, min_length=1)]
     value: Annotated[Any, Field(description='Arbitrary JSON value.')]
     project_id: ProjectId | None = None
-    source: MemorySource | None = 'agent'
+    source: MemorySource | None = 'agent'  # type: ignore[assignment]  # generated: contract default is a string
     expires_at: AwareDatetime | None = None
 
 
@@ -1433,7 +1433,7 @@ class CreateIncidentRequest(BaseModel):
     system: Annotated[str, Field(examples=['SANAA'], min_length=1)]
     issue: Annotated[str, Field(examples=['Database unavailable'], min_length=1)]
     impact: Annotated[str, Field(examples=['Production unavailable'], min_length=1)]
-    source: Source1 | None = 'agent'
+    source: Source1 | None = 'agent'  # type: ignore[assignment]  # generated: contract default is a string
 
 
 class Status12(Enum):

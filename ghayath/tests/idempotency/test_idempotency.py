@@ -3,8 +3,6 @@ replays the original result with no duplicate side effect, same key + different 
 is a CONFLICT."""
 from __future__ import annotations
 
-import httpx
-import pytest
 
 from tests.conftest import OWNER_EMAIL, bearer, unique_key
 

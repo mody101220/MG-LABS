@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Header, Request
 from app.core.envelope import build_success
 from app.core.errors import validation_error
 from app.core.registry import register
-from app.core.security import Principal, get_principal, require_mutating
+from app.core.security import Principal, require_mutating
 from app.generated import models
 
 router = APIRouter(tags=["Agent"])

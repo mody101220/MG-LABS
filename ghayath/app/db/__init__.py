@@ -37,7 +37,7 @@ class DB:
     async def fetchone(self, sql: str, *args) -> dict | None:
         params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args or None
         async with self.pool.connection() as conn:
-            conn.row_factory = dict_row
+            conn.row_factory = dict_row  # type: ignore[assignment]  # psycopg documented pattern
             cur = await conn.execute(sql, params)
             row = await cur.fetchone()
             return dict(row) if row else None
@@ -45,7 +45,7 @@ class DB:
     async def fetch(self, sql: str, *args) -> list[dict]:
         params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args or None
         async with self.pool.connection() as conn:
-            conn.row_factory = dict_row
+            conn.row_factory = dict_row  # type: ignore[assignment]  # psycopg documented pattern
             cur = await conn.execute(sql, params)
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
@@ -53,14 +53,14 @@ class DB:
     async def execute(self, sql: str, *args) -> str:
         params = args[0] if (len(args) == 1 and isinstance(args[0], (list, tuple))) else args or None
         async with self.pool.connection() as conn:
-            conn.row_factory = dict_row
+            conn.row_factory = dict_row  # type: ignore[assignment]  # psycopg documented pattern
             cur = await conn.execute(sql, params)
-            return cur.statusmessage
+            return cur.statusmessage or ""
 
     async def health(self) -> bool:
         try:
             async with self.pool.connection() as conn:
-                conn.row_factory = dict_row
+                conn.row_factory = dict_row  # type: ignore[assignment]  # psycopg documented pattern
                 await conn.execute("SELECT 1")
             return True
         except Exception:
@@ -71,10 +71,12 @@ class DB:
 
 
 def make_pool(database_url: str, pool_size: int) -> AsyncConnectionPool:
+    # open=False: the pool is opened explicitly (main lifespan / tests) — no
+    # constructor-side opening (deprecated in psycopg >= 3.3).
     return AsyncConnectionPool(
         conninfo=database_url,
         min_size=2,
         max_size=pool_size,
         kwargs={"autocommit": False},
-        open="lazy",
+        open=False,
     )

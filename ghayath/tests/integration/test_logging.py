@@ -2,10 +2,8 @@
 (passwords, tokens, secrets, authorization headers) never appear in logs."""
 from __future__ import annotations
 
-import json
 import logging
 
-import pytest
 
 from tests.conftest import OWNER_EMAIL, PASSWORD, WEBHOOK_SECRET
 

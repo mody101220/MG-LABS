@@ -1,7 +1,7 @@
 """Project service (contract §6)."""
 from __future__ import annotations
 
-from app.core.errors import AppError, conflict, not_found
+from app.core.errors import conflict, not_found
 from app.core.security import Principal
 from app.services.audit_service import AuditService
 from app.services.ids import new_id

@@ -68,6 +68,7 @@ def create_app(settings: Settings | None = None, llm=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         pool = make_pool(settings.database_url, settings.db_pool_size)
+        await pool.open()
         await pool.wait()
         db = DB(pool)
         await apply_migrations(pool)

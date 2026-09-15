@@ -1,17 +1,20 @@
 # GHAYATH FastAPI Core — Build Verification Report (Phase 20)
 
-Date: 2026-09-15 · Branch: `arena/01a0a2cf-mg-labs` · Test DB: real PostgreSQL 16.2 (embedded `pgserver`)
+Date: 2026-09-15 · Branch: `arena/01a0a2cf-mg-labs` · Test DB: real PostgreSQL 16.2 (embedded `pgserver`) · Static: mypy 2.3.1 + pyflakes
 
 Final verification run: **125/125 tests passed** (`pytest tests/`, ~5 min).
 
 ```
 GHAYATH FASTAPI CORE
 
-Implementation:        PASS — 34 of 40 spec operations implemented (6 deferred per contract:
-                       getExecution, getEventsStream, listAutomations, deleteAutomation,
-                       patchIncident, getNotifications). 63 app modules, all compile clean,
-                       app boots against real PostgreSQL 16.2; 40/40 v1 routes materialized
-                       and matched to contract paths/methods/operationIds.
+Implementation:        PASS — every operation in the OpenAPI contract is implemented:
+                       40/40 openapi.yaml operations have routes, operationIds and
+                       security-level registry entries (drift-verified). The 6 v1.1
+                       candidates of the spec doc (getExecution, getEventsStream,
+                       listAutomations, deleteAutomation, patchIncident,
+                       getNotifications) are deliberately absent from openapi.yaml and
+                       were not built (no contract change). 63 app modules, all compile
+                       clean; app boots against real PostgreSQL 16.2.
 
 OpenAPI:               PASS — openapi.yaml validates (openapi-spec-validator, 3.1); all
                        $refs resolve; 40 unique operationIds; fixed 15-error-code set;
@@ -90,6 +93,13 @@ Agent LLM (rule #30):  PASS — real OpenAI-compatible chat-completions client
                        approval + permission, RESEARCH_FETCH honestly TOOL_UNAVAILABLE,
                        conversation continuity feeds the next plan prompt.
 
+Static / Type:       PASS — pyflakes: app/ clean (0 findings; tests/ has one intentional
+                       side-effect import, marked noqa); mypy 2.3.1: “Success: no issues found
+                       in 63 source files”. The run found and fixed 7 latent defects (see log:
+                       NameError in logout, TypeError in the redis-fallback path, tool_unavailable
+                       signature, psycopg pool open-mode, repos None-annotations, llm raise-last,
+                       statusmessage None).
+
 Contract Tests:        PASS — automated drift test (FastAPI routes ↔ openapi.yaml):
                        missing endpoint, undocumented endpoint, wrong method, wrong
                        operationId, incompatible request/response schema, missing security,
@@ -121,6 +131,27 @@ Remaining Blockers:
   3. Redis optional at runtime (falls back to in-memory rate-limit store; health reports
      it down) — set GHAYATH_REDIS_URL in compose for production.
 ```
+
+## Live HTTP smoke (real uvicorn server + real PostgreSQL 16, 2026-09-15)
+
+Executed against `uvicorn app.main:app --host 0.0.0.0 --port 8010` with a fresh
+`ghayath_live` database (env-only secrets, no `.env` file):
+
+| Check | Observed |
+|---|---|
+| `GET /ready` | 200 `{"status": "ready"}` |
+| `GET /api/v1/health` | 200, `degraded` (redis honestly down; db/scheduler/agent healthy) |
+| `POST /auth/login` (seeded OWNER) | 200, Bearer token, role OWNER |
+| `GET /projects` without token | 401 `INVALID_TOKEN` envelope |
+| `GET /api/v1/nope` with token | 404 `RESOURCE_NOT_FOUND` envelope |
+| `POST /projects` (OWNER) | 201, real row, `PROJECT_CREATED` audit + `project.updated` event |
+| `POST /agent/command` with NO LLM key | 503 `INTEGRATION_OFFLINE` (honest; nothing persisted) |
+| `GET /audit` | LOGIN + PROJECT_CREATED rows with request_id |
+| Live-DB `UPDATE`/`DELETE` on `audit_logs` | both blocked by the trigger (`audit_logs is immutable`), rows intact |
+| 6 rapid logins (limit 5/min) | 429 `RATE_LIMITED` on the over-limit attempt |
+| Contract validation behavior | `owner@x.local` rejected 400 (reserved TLD) — EmailStr works as specified |
+| Shutdown | scheduler stopped, pool closed, no errors |
+
 
 ## How to run
 
@@ -169,3 +200,19 @@ These were real defects caught at runtime — listed for transparency:
     plan-rejection path — details/message swapped (details came back as a string).
 18. `GitHubAdapter.verify()` only understood create_issue results; repo_status results
     (no `number` field) were always marked failed — verify is now action-aware.
+19. `auth_service.logout()` caught `AppError` without importing it — logout with an
+    expired/tampered access token raised NameError (500) instead of completing.
+20. `rate_limit` redis fallback logged via `log_event(msg, fallback=...)` — invalid
+    kwarg; the honest-degradation path (redis down) raised TypeError on the first
+    rate-limit check. Now `log_event(msg, {"fallback": "memory"})`.
+21. `tool_unavailable(tool, details=...)` called in 4 adapter sites with a `details`
+    kwarg the helper did not accept — TypeError on every provider 4xx/5xx response.
+    Helper now accepts and merges details (same code + envelope shape).
+22. `make_pool(open="lazy")` — psycopg 3.3 `open` is `bool | None`; the truthy string
+    triggered deprecated constructor-side pool opening (source of the 42+ suite
+    warnings). Now `open=False` + explicit `await pool.open()` in lifespan/tests.
+23. Repos layer: 15 methods annotated `-> dict` but returning `fetchone()` (can be
+    None) — corrected to `-> dict | None`; count/`RETURNING` lookups routed through a
+    new `fetchone_one()` helper (asserts the one-row invariant); mixed-type SQL args
+    lists properly typed; `email_service` reply-draft narrowing; `llm.chat`
+    `raise last` narrowed; `statusmessage` `or ""`.

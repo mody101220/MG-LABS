@@ -20,8 +20,6 @@ from __future__ import annotations
 
 import json
 
-import httpx
-import pytest
 
 from tests.conftest import AGENT_EMAIL, OWNER_EMAIL, bearer, unique_key
 from tests.integration.test_api_contract import MockProviders, connect_mock, data, err

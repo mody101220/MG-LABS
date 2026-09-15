@@ -5,9 +5,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.core.errors import AppError, conflict, not_found, validation_error
+from app.core.errors import conflict, not_found, validation_error
 from app.core.security import Principal
-from app.generated import models
 from app.services.audit_service import AuditService
 from app.services.events import EventBus
 from app.services.ids import new_id
@@ -49,7 +48,7 @@ class TaskService:
             out["updated_at"] = out["updated_at"].isoformat().replace("+00:00", "Z")
         return out
 
-    async def create(self, principal: Principal, project_id: str, title: str, priority: str,
+    async def create(self, principal: Principal | None, project_id: str, title: str, priority: str,
                      status: str = "TODO", description: str | None = None, assignee: str | None = None,
                      due_at: datetime | None = None) -> dict:
         project = await self._db.projects.get(project_id)
@@ -98,7 +97,7 @@ class TaskService:
             raise conflict("Cancelled tasks cannot be completed", {"task_id": task_id})
         ver = await self._verify.record_task_verification(task_id, verification_required)
         if not verification_required:
-            done = await self._db.tasks.mark_done(task_id)
+            await self._db.tasks.mark_done(task_id)
             await self._audit.log("TASK_COMPLETED", principal, "SUCCESS", "task", task_id,
                                   project_id=task["project_id"],
                                   details={"verification": "not_required", "verification_id": ver["id"]})

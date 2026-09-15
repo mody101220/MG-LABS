@@ -2,7 +2,6 @@
 documented 429 + X-RateLimit-Reset; no undocumented limits)."""
 from __future__ import annotations
 
-import pytest
 
 from tests.conftest import AGENT_EMAIL, OWNER_EMAIL, bearer
 
