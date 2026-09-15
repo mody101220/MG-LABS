@@ -93,6 +93,16 @@ Agent LLM (rule #30):  PASS — real OpenAI-compatible chat-completions client
                        approval + permission, RESEARCH_FETCH honestly TOOL_UNAVAILABLE,
                        conversation continuity feeds the next plan prompt.
 
+Reproducible Gen:   PASS — scripts/generate_models.py (checked in) regenerates
+                       app/generated/models.py byte-stably from openapi.yaml with the
+                       pinned generator datamodel-code-generator 0.37.0
+                       (--output-model-type pydantic_v2.BaseModel --use-annotated
+                       --use-union-operator --use-standard-collections); volatile
+                       timestamp normalized; the 4 str-default-on-enum type-ignores are
+                       re-added automatically from mypy output. Verified: two runs in a
+                       row produce an identical file (git diff empty). CI fails on any
+                       contract/model drift.
+
 Static / Type:       PASS — pyflakes: app/ clean (0 findings; tests/ has one intentional
                        side-effect import, marked noqa); mypy 2.3.1: “Success: no issues found
                        in 63 source files”. The run found and fixed 7 latent defects (see log:
@@ -131,6 +141,10 @@ Remaining Blockers:
   3. Redis optional at runtime (falls back to in-memory rate-limit store; health reports
      it down) — set GHAYATH_REDIS_URL in compose for production.
 ```
+
+CI: `.github/workflows/ci.yml` runs the full battery on every push/PR
+(pyflakes, mypy, openapi-spec-validator, pytest on real PostgreSQL 16 via
+pgserver, model-drift regeneration check).
 
 ## Live HTTP smoke (real uvicorn server + real PostgreSQL 16, 2026-09-15)
 

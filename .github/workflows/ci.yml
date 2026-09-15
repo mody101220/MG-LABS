@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "arena/*"]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install (prod + dev deps)
+        run: pip install -e 'ghayath/[dev]'
+
+      - name: Static check (pyflakes — production code)
+        working-directory: ghayath
+        run: pyflakes app/
+
+      - name: Type check (mypy)
+        working-directory: ghayath
+        run: mypy app/
+
+      - name: OpenAPI 3.1 validation
+        working-directory: ghayath
+        run: python -m openapi_spec_validator openapi/openapi.yaml
+
+      - name: Contract drift + full test suite (real PostgreSQL 16 via pgserver)
+        working-directory: ghayath
+        run: python -m pytest tests/ -q
+
+      - name: Generated models in sync with the contract
+        # Regenerates app/generated/models.py from openapi.yaml with the pinned
+        # generator (scripts/generate_models.py) and fails on any drift.
+        working-directory: ghayath
+        run: |
+          python scripts/generate_models.py
+          git diff --exit-code -- app/generated/models.py

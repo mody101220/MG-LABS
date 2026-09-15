@@ -76,13 +76,26 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 كل مرشح أعلاه يضاف بـRevision للعقد (رقم version) — لا يُضاف ضمناً.
 
+## توليد النماذج (مُعيَّر — لا تعديل يدوي)
+
+`app/generated/models.py` يُولَّد آلياً من `openapi/openapi.yaml` بمولّد **محدد الإصدار**
+(0.37.0 مثبت في `pyproject.toml`):
+
+```bash
+pip install -e '.[dev]'
+python scripts/generate_models.py   # يعيد التوليد + تطبيع الـtimestamp + type-ignores تلقائية
+```
+
+CI يفشل إن لم يكن الملف المتولَّد مطابقاً للعقد الحالي (خطوة drift-check).
+
 ## التحويل إلى FastAPI (مثال)
+
 
 ```python
 # كل response schema في openapi.yaml يتحول 1:1 إلى Pydantic عبر fastapi -> openapi
 pip install fastapi uvicorn
 # توليد الـschemas:
-datamodel-codegen --input openapi.yaml --output schemas.py
+python scripts/generate_models.py   # انظر قسم «توليد النماذج» أعلاه
 # الـenvelope: wrapper واحد
 def ok(data, request_id, ts): return {"success": True, "data": data, "request_id": request_id, "timestamp": ts}
 ```
