@@ -151,4 +151,8 @@ class GitHubAdapter(IntegrationAdapter):
         return resp.json()
 
     async def verify(self, result: dict) -> bool:
-        return result.get("number") is not None
+        if "number" in result:  # create_issue result
+            return result.get("number") is not None
+        if "build" in result:   # repo_status result — the signals must be present
+            return result.get("open_issues") is not None
+        return False

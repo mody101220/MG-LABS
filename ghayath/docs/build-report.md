@@ -2,14 +2,14 @@
 
 Date: 2026-09-15 · Branch: `arena/01a0a2cf-mg-labs` · Test DB: real PostgreSQL 16.2 (embedded `pgserver`)
 
-Final verification run: **111/111 tests passed** (`pytest tests/`, ~4 min).
+Final verification run: **125/125 tests passed** (`pytest tests/`, ~5 min).
 
 ```
 GHAYATH FASTAPI CORE
 
 Implementation:        PASS — 34 of 40 spec operations implemented (6 deferred per contract:
                        getExecution, getEventsStream, listAutomations, deleteAutomation,
-                       patchIncident, getNotifications). 61 app modules, all compile clean,
+                       patchIncident, getNotifications). 63 app modules, all compile clean,
                        app boots against real PostgreSQL 16.2; 40/40 v1 routes materialized
                        and matched to contract paths/methods/operationIds.
 
@@ -74,15 +74,31 @@ Health:                PASS — GET /api/v1/health real dependency checks (datab
                        overall "degraded", never faked green); GET /ready ops probe
                        (deliberately outside /api/v1) returns ready against live DB.
 
+Agent LLM (rule #30):  PASS — real OpenAI-compatible chat-completions client
+                       (app/integrations/llm.py) is the model boundary; the brain
+                       (app/agent/brain.py) plans from LIVE context (projects,
+                       adapter health, memory, conversation history) and its plan is
+                       VALIDATED against the 17-tool registry (unknown tool / bad args /
+                       >10 steps -> 400, nothing persisted). No LLM key -> 503
+                       INTEGRATION_OFFLINE (never a silent rule-based fallback); provider
+                       down at planning -> 503; provider down at summarization ->
+                       deterministic template from REAL step results. User text is always
+                       wrapped in <user_command> data markers. 14 dedicated tests at the
+                       HTTP transport boundary (tests/mock_llm.py, deterministic double):
+                       task really created, whatsapp really sent (1 provider call),
+                       memory saved with source='agent', AGENT role still gated by
+                       approval + permission, RESEARCH_FETCH honestly TOOL_UNAVAILABLE,
+                       conversation continuity feeds the next plan prompt.
+
 Contract Tests:        PASS — automated drift test (FastAPI routes ↔ openapi.yaml):
                        missing endpoint, undocumented endpoint, wrong method, wrong
                        operationId, incompatible request/response schema, missing security,
                        wrong documented status — all checked, all green.
 
-Integration Tests:     PASS — 111/111 executed and passing (pytest, real PostgreSQL 16.2,
-                       providers mocked only at the httpx transport boundary): full API
-                       contract incl. list filters + pagination, approval flows, agent
-                       pipeline (COMPLETED with independent verification;
+Integration Tests:     PASS — 125/125 executed and passing (pytest, real PostgreSQL 16.2,
+                       providers + LLM mocked only at the httpx transport boundary): full
+                       API contract incl. list filters + pagination, approval flows,
+                       LLM-driven agent pipeline (COMPLETED with independent verification;
                        TOOL_UNAVAILABLE / RESOURCE_NOT_FOUND outcomes honest, never faked
                        success; IN_REVIEW task gate), events→automation trigger firing on
                        webhook, scheduler SCHEDULE run path, structured logging with
@@ -99,6 +115,9 @@ Remaining Blockers:
   2. Live provider credentials (WhatsApp/Email/GitHub) intentionally absent — provider
      paths verified only via injected transport mocks + explicit INTEGRATION_OFFLINE
      states; a smoke run with real credentials is the remaining end-to-end step.
+     Same for the LLM: set GHAYATH_LLM_API_KEY (+ optional GHAYATH_LLM_BASE_URL /
+     GHAYATH_LLM_MODEL for any OpenAI-compatible endpoint) for a live-model smoke run;
+     until then /agent/command returns 503 INTEGRATION_OFFLINE by design.
   3. Redis optional at runtime (falls back to in-memory rate-limit store; health reports
      it down) — set GHAYATH_REDIS_URL in compose for production.
 ```
@@ -140,3 +159,13 @@ These were real defects caught at runtime — listed for transparency:
     JSONB match failed) — aligned.
 14. `GET /incidents/{id}` asserted by a test but absent from the contract — the 404 is the
     correct behavior; test corrected.
+15. `await` precedence: `return await self.fetch(...)[::-1]` parses as
+    `await (self.fetch(...)[::-1])` — a coroutine is not subscriptable. (conversation
+    history for the agent's context)
+16. `tool_unavailable(tool, details=...)` called with a `details` kwarg the helper does
+    not accept — latent TypeError on the RESEARCH_FETCH / missing-repo paths (the old
+    code carried the same latent call); now constructed correctly.
+17. `validation_error(details, message)` argument order inverted in the brain's
+    plan-rejection path — details/message swapped (details came back as a string).
+18. `GitHubAdapter.verify()` only understood create_issue results; repo_status results
+    (no `number` field) were always marked failed — verify is now action-aware.

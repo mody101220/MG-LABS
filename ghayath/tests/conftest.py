@@ -93,6 +93,25 @@ def make_settings(dsn: str) -> Settings:
 
 @pytest.fixture
 async def client(db_reset):
+    """API client with a deterministic LLM (OpenAI-compatible double) configured,
+    so the agent pipeline runs end to end against the real wire format."""
+    from tests.mock_llm import ScriptedLLM, make_llm_client
+
+    mock = ScriptedLLM()
+    app = create_app(make_settings(db_reset), llm=make_llm_client(mock))
+    app.state.test_dsn = db_reset
+    app.state.mock_llm = mock
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+            c.app = app
+            yield c
+
+
+@pytest.fixture
+async def client_no_llm(db_reset):
+    """API client with NO LLM configured — the agent brain must be honestly
+    unavailable (INTEGRATION_OFFLINE), never a silent fallback."""
     app = create_app(make_settings(db_reset))
     app.state.test_dsn = db_reset
     transport = httpx.ASGITransport(app=app)

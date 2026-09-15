@@ -40,6 +40,17 @@ class Settings(BaseSettings):
     github_base_url: str = "https://api.github.com"
     github_token: str | None = None
 
+    # LLM (agent brain) — any OpenAI-compatible /chat/completions endpoint.
+    # When no API key is set the agent brain is honestly unavailable
+    # (INTEGRATION_OFFLINE), never a silent rule-based fallback.
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None
+    llm_model: str = "gpt-4o-mini"
+    llm_timeout_seconds: float = 60.0
+
+    # Agent planning budget
+    agent_max_plan_steps: int = 10
+
     # Rate limiting (contract: auth 5/min, agent 60/min)
     rate_limit_enabled: bool = True
 

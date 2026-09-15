@@ -109,6 +109,15 @@ class ConversationRepository(_Repo):
             conversation_id, role, content, command_id,
         )
 
+    async def history(self, conversation_id: str, limit: int = 10) -> list[dict]:
+        """Most recent messages (chronological order) for prompt context."""
+        rows = await self.fetch(
+            "SELECT role, content, created_at FROM conversation_messages "
+            "WHERE conversation_id = %s ORDER BY id DESC LIMIT %s",
+            conversation_id, limit,
+        )
+        return rows[::-1]
+
 
 # ─────────────────────────── Projects ───────────────────────────
 

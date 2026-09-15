@@ -12,8 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse
 
-from app.agent.intent import KeywordIntentEngine
-from app.agent.planner import DefaultPlanner
+from app.agent.brain import AgentBrain
 from app.agent.permission import PermissionEngine
 from app.agent.verification import VerificationEngine
 from app.api.v1 import create_v1_router
@@ -27,6 +26,7 @@ from app.core.security import hash_password
 from app.db import DB, make_pool
 from app.db.migrate import apply_migrations
 from app.integrations.adapters import EmailAdapter, GitHubAdapter, WhatsAppAdapter
+from app.integrations.llm import OpenAICompatibleLLM
 from app.services.agent_service import AgentService
 from app.services.approval_service import ApprovalService
 from app.services.audit_service import AuditService
@@ -57,7 +57,9 @@ class ZJSONResponse(JSONResponse):
         return text.replace("+00:00", "Z").encode("utf-8")
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, llm=None) -> FastAPI:
+    """Application factory. `llm` (an OpenAICompatibleLLM) is injectable for
+    tests; production builds one from GHAYATH_LLM_* environment settings."""
     settings = settings or Settings()
     if not settings.auth_jwt_secret:
         raise RuntimeError("GHAYATH_AUTH_JWT_SECRET must be set")
@@ -76,6 +78,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "email": EmailAdapter(settings),
             "github": GitHubAdapter(settings),
         }
+        llm_client = llm
+        if llm_client is None:
+            llm_client = OpenAICompatibleLLM(
+                base_url=settings.llm_base_url, api_key=settings.llm_api_key,
+                model=settings.llm_model, timeout_seconds=settings.llm_timeout_seconds)
         audit = AuditService(db)
         events = EventBus(db)
         approvals = ApprovalService(db, events, audit)
@@ -89,19 +96,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         email = EmailService(db, settings, adapters["email"], permission_engine, approvals, audit)
         whatsapp = WhatsAppService(db, settings, adapters["whatsapp"], permission_engine, approvals, audit, events)
         github = GitHubService(db, adapters["github"], permission_engine, audit)
+        memory = MemoryService(db, audit)
         monitoring = MonitoringService(db, adapters, audit)
         automations = AutomationService(db, audit, events)
-        agent = AgentService(db, settings, KeywordIntentEngine(), DefaultPlanner(), permission_engine,
-                             verification_engine, audit, events, approvals, adapters, incidents)
+        brain = AgentBrain(db, llm_client, settings, adapters)
+        agent = AgentService(db, settings, brain, permission_engine, verification_engine,
+                             audit, events, approvals, adapters, incidents, tasks, email,
+                             whatsapp, github, memory, automations)
         scheduler = Scheduler(db, events, monitoring, tasks, notifications, email, automations)
         system = SystemService(db, adapters, lambda: scheduler.running)
+        app.state.llm = llm_client
 
         services = {
             "auth": AuthService(db, settings, audit),
             "agent": agent,
             "projects": ProjectService(db, audit, events),
             "tasks": tasks,
-            "memory": MemoryService(db, audit),
+            "memory": memory,
             "whatsapp": whatsapp,
             "email": email,
             "github": github,
@@ -132,6 +143,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await app.state.scheduler.stop()
             for adapter in adapters.values():
                 await adapter.close()
+            await llm_client.close()
             await db.close()
 
     app = FastAPI(
