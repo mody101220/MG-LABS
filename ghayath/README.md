@@ -76,6 +76,11 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 كل مرشح أعلاه يضاف بـRevision للعقد (رقم version) — لا يُضاف ضمناً.
 
+**مقترح v1.1 جاهز للمراجعة:** [`docs/api-contract-v1.1-proposal.md`](docs/api-contract-v1.1-proposal.md)
+(schemas + status codes + صلاحيات + قواعد idempotency/audit) +
+القطعة القابلة للدمج آلياً [`openapi/v1.1-proposal-fragment.yaml`](openapi/v1.1-proposal-fragment.yaml).
+**غير مُعتمد** — عقد v1 الحالي لم يُمَس.
+
 ## توليد النماذج (مُعيَّر — لا تعديل يدوي)
 
 `app/generated/models.py` يُولَّد آلياً من `openapi/openapi.yaml` بمولّد **محدد الإصدار**

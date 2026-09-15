@@ -15,6 +15,12 @@ Implementation:        PASS — every operation in the OpenAPI contract is imple
                        getNotifications) are deliberately absent from openapi.yaml and
                        were not built (no contract change). 63 app modules, all compile
                        clean; app boots against real PostgreSQL 16.2.
+                       v1.1 PROPOSAL (pending user decision, NOT adopted): full
+                       revision drafted — docs/api-contract-v1.1-proposal.md +
+                       openapi/v1.1-proposal-fragment.yaml (additive delta: 6 ops,
+                       11 schemas, 0 new error codes, 0 DDL, 0 new rate tiers,
+                       approval list unchanged; verified: fragment YAML parses and
+                       every $ref resolves against the untouched v1 spec).
 
 OpenAPI:               PASS — openapi.yaml validates (openapi-spec-validator, 3.1); all
                        $refs resolve; 40 unique operationIds; fixed 15-error-code set;
