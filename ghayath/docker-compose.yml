@@ -1,0 +1,56 @@
+name: ghayath
+
+# No secrets in this file. Every credential comes from the environment / .env
+# (see .env.example).
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-ghayath}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ghayath} -d ${POSTGRES_DB:-ghayath}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    # Redis auth is optional for a single-host deployment; set if exposing the port.
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      GHAYATH_DATABASE_URL: postgresql://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@db:5432/${POSTGRES_DB:-ghayath}
+      GHAYATH_REDIS_URL: redis://redis:6379/0
+      GHAYATH_AUTH_JWT_SECRET: ${GHAYATH_AUTH_JWT_SECRET:?set GHAYATH_AUTH_JWT_SECRET in .env}
+      GHAYATH_SEED_OWNER_EMAIL: ${GHAYATH_SEED_OWNER_EMAIL:-}
+      GHAYATH_SEED_OWNER_PASSWORD: ${GHAYATH_SEED_OWNER_PASSWORD:-}
+      GHAYATH_WHATSAPP_WEBHOOK_SECRET: ${GHAYATH_WHATSAPP_WEBHOOK_SECRET:?set GHAYATH_WHATSAPP_WEBHOOK_SECRET in .env}
+      GHAYATH_WHATSAPP_ALLOWED_SENDERS: ${GHAYATH_WHATSAPP_ALLOWED_SENDERS:-}
+      GHAYATH_WHATSAPP_PROVIDER_BASE_URL: ${GHAYATH_WHATSAPP_PROVIDER_BASE_URL:-}
+      GHAYATH_WHATSAPP_PROVIDER_TOKEN: ${GHAYATH_WHATSAPP_PROVIDER_TOKEN:-}
+      GHAYATH_EMAIL_PROVIDER_BASE_URL: ${GHAYATH_EMAIL_PROVIDER_BASE_URL:-}
+      GHAYATH_EMAIL_PROVIDER_TOKEN: ${GHAYATH_EMAIL_PROVIDER_TOKEN:-}
+      GHAYATH_GITHUB_BASE_URL: ${GHAYATH_GITHUB_BASE_URL:-https://api.github.com}
+      GHAYATH_GITHUB_TOKEN: ${GHAYATH_GITHUB_TOKEN:-}
+      GHAYATH_RATE_LIMIT_ENABLED: ${GHAYATH_RATE_LIMIT_ENABLED:-true}
+      GHAYATH_LOG_LEVEL: ${GHAYATH_LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
