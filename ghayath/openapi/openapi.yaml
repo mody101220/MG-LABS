@@ -1,0 +1,4204 @@
+openapi: 3.1.0
+
+info:
+  title: "GHAYATH PERSONAL AI - Core API"
+  version: "1.0.0"
+  description: |
+    REST/JSON API contract for **GHAYATH PERSONAL AI** (v1.0) — a Modular Agentic
+    Architecture where an autonomous agent monitors and operates the owner's projects,
+    inboxes, and communications under strict permission + approval control.
+
+    ## Global rules
+
+    **Envelope.** Every response (success or error) uses exactly the standard envelope:
+
+    ```json
+    { "success": true,  "data": { }, "request_id": "req_01J...", "timestamp": "2026-09-11T20:00:00Z" }
+    { "success": false, "error": { "code": "PERMISSION_DENIED", "message": "...", "details": { } },
+      "request_id": "req_01J...", "timestamp": "2026-09-11T20:00:00Z" }
+    ```
+
+    **Time.** All timestamps are ISO-8601 UTC (`...Z`) internally. Clients convert to
+    the display timezone. Dates use `YYYY-MM-DD`.
+
+    **IDs.** String identifiers with domain prefixes (ULID-based, human-greppable,
+    log-safe): `usr_`, `prj_`, `ts_`, `mem_`, `cmd_`, `plan_`, `exec_`, `appr_`,
+    `auto_`, `notf_`, `inc_`, `conv_`, `msg_` (email), `wmsg_` (WhatsApp),
+    `draft_`, `repo_`, `iss_`, `evt_`, `req_`, `chk_`.
+
+    **Authentication.** `Authorization: Bearer <JWT>` on every operation except
+    `POST /auth/login`, `GET /health`, and `POST /webhooks/whatsapp`
+    (signed via `X-Webhook-Signature`, HMAC-SHA256 of the raw body).
+    Roles (RBAC): `OWNER` (full control), `AGENT` (service principal of the internal
+    agent — never grants itself permissions), `VIEWER` (read-only dashboard).
+
+    **Idempotency.** Mutating operations that can be retried accept the
+    `Idempotency-Key` header (required where marked). Retries with the same key
+    return the original response and never re-execute the side effect
+    (no double WhatsApp/Email sends, no double executions). Keys are stored 24h.
+
+    **Correlation.** Any request may carry an optional `X-Request-Id` header
+    (max 64 chars) for client-side correlation; when absent the gateway
+    generates one. The id is always returned in the envelope (`request_id`).
+
+    **Rate limiting.** Applied at the gateway. Limits: auth 5/min, agent commands
+    60/min, WhatsApp/Email provider-dependent, monitoring per scheduler.
+    On excess → `429` with code `RATE_LIMITED`.
+
+    **Error code → HTTP mapping (fixed set, do not extend without a spec revision):**
+
+    | Code | HTTP |
+    |---|---|
+    | `VALIDATION_ERROR` | 400 |
+    | `AUTHENTICATION_FAILED`, `INVALID_TOKEN` | 401 |
+    | `PERMISSION_DENIED`, `SECRET_ACCESS_DENIED` | 403 |
+    | `RESOURCE_NOT_FOUND` | 404 |
+    | `CONFLICT`, `APPROVAL_REQUIRED` | 409 |
+    | `RATE_LIMITED` | 429 |
+    | `EXECUTION_FAILED`, `VERIFICATION_FAILED`, `DEPENDENCY_FAILURE` | 500 |
+    | `INTEGRATION_OFFLINE`, `TOOL_UNAVAILABLE` | 503 |
+    | `TIMEOUT` | 504 |
+
+    **Agent safety (architectural rule #30).** The LLM never calls external services
+    directly. Every action flows:
+    `LLM → Planner → Tool Router → Permission Engine → Action Executor → External API → Verification → Audit Log`.
+    Sensitive actions (send, execute, commit/merge, delete) require explicit permission
+    and/or human approval (`APPROVAL_REQUIRED`).
+
+    **Audit.** The audit log is append-only and immutable for the agent.
+externalDocs:
+  description: Human-readable contract (Arabic)
+  url: ../docs/api-contract-specification-v1.0.md
+
+servers:
+  - url: /api/v1
+    description: Core API behind the API Gateway (auth, rate limiting, validation, authorization)
+
+tags:
+  - name: Auth
+    description: Login, token refresh, logout
+  - name: Agent
+    description: Natural-language commands and plan execution
+  - name: Projects
+    description: Project registry and detail
+  - name: Tasks
+    description: Task management with verification-gated completion
+  - name: Memory
+    description: Structured long-term memory
+  - name: WhatsApp
+    description: WhatsApp integration status and outbound messages
+  - name: Webhooks
+    description: Inbound provider webhooks (signed)
+  - name: Email
+    description: Inbox, drafts, and sending
+  - name: GitHub
+    description: Repositories, repo health, issues
+  - name: Monitoring
+    description: Active health checks
+  - name: Automations
+    description: Scheduled/event-driven automations
+  - name: Approvals
+    description: Human-in-the-loop approvals
+  - name: Permissions
+    description: RBAC permission state and checks
+  - name: Notifications
+    description: Outbound notifications with severity routing
+  - name: Audit
+    description: Append-only audit trail
+  - name: Incidents
+    description: Emergency incidents
+  - name: System
+    description: Health and system status
+  - name: Brief
+    description: Daily brief
+
+security:
+  - bearerAuth: []
+
+paths:
+
+  # ─────────────────────────── AUTH ───────────────────────────
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: User login
+      description: |
+        Exchanges credentials for access + refresh tokens.
+        Rate limit: 5 requests/minute per account (429 on excess).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: user@example.com
+              password: "********"
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: AUTHENTICATION_FAILED
+                  message: "Email or password is incorrect"
+                  details: {}
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshToken
+      summary: Refresh access token
+      description: |
+        Rotates the refresh token: a new refresh token is issued and the old one
+        is invalidated (reuse of a rotated token revokes the session).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: New token pair
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Refresh token invalid, expired, or already rotated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: INVALID_TOKEN
+                  message: "Refresh token is invalid or expired"
+                  details: {}
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Logout
+      description: Invalidates the active session/refresh token. Idempotent — a second call is a no-op success.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Empty body.
+      responses:
+        '200':
+          description: Session invalidated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogoutResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ─────────────────────────── AGENT ───────────────────────────
+
+  /agent/command:
+    post:
+      tags: [Agent]
+      operationId: agentCommand
+      summary: Submit a natural-language command
+      description: |
+        The main entry point for natural-language commands (Arabic or English).
+        The Planner classifies the intent and produces an executable plan.
+        Nothing is executed yet — execution requires `POST /agent/execute`
+        (and human approval when the plan contains sensitive actions).
+        Rate limit: 60 requests/minute.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentCommandRequest'
+            example:
+              command: "تابعلي مشروع SANAA"
+              source: dashboard
+              conversation_id: conv_001
+              autonomous: true
+      responses:
+        '201':
+          description: Command accepted and plan created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentCommandResponse'
+              example:
+                success: true
+                data:
+                  command_id: cmd_001
+                  intent: PROJECT_MONITORING
+                  status: PLANNED
+                  plan:
+                    - task: GET_PROJECT_STATUS
+                      status: PENDING
+                    - task: CHECK_OPEN_ISSUES
+                      status: PENDING
+                    - task: CHECK_DEPLOYMENT
+                      status: PENDING
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Role does not allow autonomous agent commands
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /agent/execute:
+    post:
+      tags: [Agent]
+      operationId: agentExecute
+      summary: Execute an approved plan
+      description: |
+        Starts execution of a plan created by `POST /agent/command`.
+        - If the plan is fully permitted → execution starts (`RUNNING`).
+        - If any step needs human approval → `409 APPROVAL_REQUIRED` and an
+          approval record is created (id in `error.details.approval_id`).
+        - A plan not in `PLANNED`/`WAITING_APPROVAL` state → `409 CONFLICT`.
+        Execution is asynchronous: follow state via the execution's status,
+        events, notifications, and the daily brief.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentExecuteRequest'
+            example:
+              command_id: cmd_001
+              approval_id: null
+      responses:
+        '202':
+          description: Execution accepted and running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentExecuteResponse'
+              example:
+                success: true
+                data:
+                  execution_id: exec_001
+                  command_id: cmd_001
+                  status: RUNNING
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:05Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Approval required, or command is not in an executable state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                approvalRequired:
+                  value:
+                    success: false
+                    error:
+                      code: APPROVAL_REQUIRED
+                      message: "Human approval is required before executing this plan"
+                      details:
+                        approval_id: appr_001
+                    request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                    timestamp: "2026-09-11T20:00:05Z"
+                conflict:
+                  value:
+                    success: false
+                    error:
+                      code: CONFLICT
+                      message: "Command is not in PLANNED or WAITING_APPROVAL state"
+                      details:
+                        command_id: cmd_001
+                        status: COMPLETED
+                    request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                    timestamp: "2026-09-11T20:00:05Z"
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ─────────────────────────── PROJECTS ───────────────────────────
+
+  /projects:
+    get:
+      tags: [Projects]
+      operationId: listProjects
+      summary: List projects
+      description: Returns project summaries (newest activity first).
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Project list
+          headers:
+            X-Total-Count:
+              $ref: '#/components/headers/XTotalCount'
+            X-Total-Pages:
+              $ref: '#/components/headers/XTotalPages'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectListResponse'
+              example:
+                success: true
+                data:
+                  - id: prj_sanaa
+                    name: SANAA
+                    status: ACTIVE
+                    priority: P1
+                    version: "1.0"
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    post:
+      tags: [Projects]
+      operationId: createProject
+      summary: Create a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectRequest'
+            example:
+              name: SANAA
+              description: "منصة طلب الخدمات والحرفيين"
+              priority: P1
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: A project with this name already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: CONFLICT
+                  message: "Project with name 'SANAA' already exists"
+                  details:
+                    name: SANAA
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /projects/{project_id}:
+    get:
+      tags: [Projects]
+      operationId: getProject
+      summary: Get project detail
+      description: |
+        Full project snapshot: identity, repository, deployment, task/bug/security
+        counters, dependencies, integrations, last activity, and next action.
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdParam'
+      responses:
+        '200':
+          description: Project detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    patch:
+      tags: [Projects]
+      operationId: updateProject
+      summary: Update a project
+      description: Partial update. `version` bumps create a new version marker; `next_action` is the owner-visible pointer.
+      parameters:
+        - $ref: '#/components/parameters/ProjectIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProjectRequest'
+            example:
+              status: ACTIVE
+              version: "1.1"
+              priority: P1
+              next_action: Production deployment
+      responses:
+        '200':
+          description: Project updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ─────────────────────────── TASKS ───────────────────────────
+
+  /tasks:
+    post:
+      tags: [Tasks]
+      operationId: createTask
+      summary: Create a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskRequest'
+            example:
+              project_id: prj_sanaa
+              title: "فحص API authentication"
+              priority: P1
+              status: TODO
+              due_at: "2026-09-15T12:00:00Z"
+      responses:
+        '201':
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    get:
+      tags: [Tasks]
+      operationId: listTasks
+      summary: List tasks
+      description: Filtered, paginated task list (most urgent first by default).
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^prj_[a-z0-9]+$'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/TaskStatus'
+        - name: priority
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Priority'
+        - name: assignee
+          in: query
+          required: false
+          schema:
+            type: string
+          description: User id or agent principal.
+        - name: due_before
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Only tasks due before this UTC instant.
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Task list
+          headers:
+            X-Total-Count:
+              $ref: '#/components/headers/XTotalCount'
+            X-Total-Pages:
+              $ref: '#/components/headers/XTotalPages'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /tasks/{task_id}:
+    patch:
+      tags: [Tasks]
+      operationId: updateTask
+      summary: Update a task
+      description: Partial update. Moving a task to `DONE` directly is NOT allowed — use `POST /tasks/{task_id}/complete` (verification-gated).
+      parameters:
+        - $ref: '#/components/parameters/TaskIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTaskRequest'
+            example:
+              status: IN_PROGRESS
+      responses:
+        '200':
+          description: Task updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Invalid state transition (e.g. re-opening a DONE task)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /tasks/{task_id}/complete:
+    post:
+      tags: [Tasks]
+      operationId: completeTask
+      summary: Complete a task (verification-gated)
+      description: |
+        A task is NOT complete just because the agent says it is.
+        - `verification.required = true` → task moves to `IN_REVIEW`; it becomes
+          `DONE` only after independent verification passes.
+        - `verification.required = false` → task becomes `DONE` immediately
+          (still recorded in the audit log with the claiming principal).
+      parameters:
+        - $ref: '#/components/parameters/TaskIdParam'
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCompleteRequest'
+            example:
+              verification:
+                required: true
+      responses:
+        '200':
+          description: Completion accepted (task is DONE or IN_REVIEW pending verification)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskCompleteResponse'
+              example:
+                success: true
+                data:
+                  task_id: ts_001
+                  status: IN_REVIEW
+                  verification_status: PENDING
+                  verification_id: ver_001
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Task is already completed or in a non-completable state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ─────────────────────────── MEMORY ───────────────────────────
+
+  /memory:
+    post:
+      tags: [Memory]
+      operationId: createMemory
+      summary: Write a memory record
+      description: |
+        Structured long-term memory. Upsert semantics: writing the same
+        `(type, key, project_id)` updates the existing record.
+        `source = verified` marks facts confirmed by an external system or the user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMemoryRequest'
+            example:
+              type: PROJECT_MEMORY
+              key: sanaa.current_version
+              value: "1.0"
+              source: verified
+      responses:
+        '201':
+          description: Memory record written (or updated)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Missing MEMORY.WRITE permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    get:
+      tags: [Memory]
+      operationId: listMemory
+      summary: Query memory records
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/MemoryType'
+        - name: project_id
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^prj_[a-z0-9]+$'
+        - name: key
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact key match.
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Memory records
+          headers:
+            X-Total-Count:
+              $ref: '#/components/headers/XTotalCount'
+            X-Total-Pages:
+              $ref: '#/components/headers/XTotalPages'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /memory/{memory_id}:
+    delete:
+      tags: [Memory]
+      operationId: deleteMemory
+      summary: Delete a memory record
+      description: Requires the `MEMORY.DELETE` permission (agent never holds it by default). Deletion is audit-logged with the full removed record in `details`.
+      parameters:
+        - $ref: '#/components/parameters/MemoryIdParam'
+      responses:
+        '200':
+          description: Memory record deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryDeleteResponse'
+              example:
+                success: true
+                data:
+                  memory_id: mem_001
+                  deleted: true
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Missing MEMORY.DELETE permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: PERMISSION_DENIED
+                  message: "Required permission is missing"
+                  details:
+                    required: MEMORY.DELETE
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ─────────────────────────── WHATSAPP ───────────────────────────
+
+  /integrations/whatsapp/status:
+    get:
+      tags: [WhatsApp]
+      operationId: getWhatsappStatus
+      summary: WhatsApp integration status
+      description: Connectivity and currently granted permissions for the WhatsApp integration.
+      responses:
+        '200':
+          description: Status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WhatsAppStatusResponse'
+              example:
+                success: true
+                data:
+                  connected: true
+                  provider: whatsapp
+                  permissions: [READ, REPLY]
+                  last_checked_at: "2026-09-11T20:00:00Z"
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /whatsapp/messages/send:
+    post:
+      tags: [WhatsApp]
+      operationId: sendWhatsappMessage
+      summary: Send a WhatsApp message
+      description: |
+        Pipeline before the message leaves the system:
+        `AUTHORIZATION → PERMISSION CHECK → RECIPIENT VALIDATION → CONTENT POLICY → SEND → VERIFY → AUDIT`.
+
+        - Missing `WHATSAPP.SEND`/`WHATSAPP.REPLY` permission → `403 PERMISSION_DENIED`
+          (or `409 APPROVAL_REQUIRED` when the owner can grant it via approval).
+        - Invalid E.164 recipient → `400 VALIDATION_ERROR` (`details.field = recipient`).
+        - Content policy violation → `400 VALIDATION_ERROR` (`details.policy = content_policy`).
+        - Provider not connected → `503 INTEGRATION_OFFLINE`.
+        - **Idempotency is mandatory:** a retry with the same `Idempotency-Key`
+          returns the original result and never sends twice.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendWhatsAppRequest'
+            example:
+              recipient: "+963991234567"
+              message: "مرحبا، محمد مشغول حاليا."
+      responses:
+        '200':
+          description: Message accepted (queued or sent)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendWhatsAppResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Human approval required before sending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: APPROVAL_REQUIRED
+                  message: "Human approval is required before sending"
+                  details:
+                    approval_id: appr_001
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
+
+  # ─────────────────────────── WEBHOOKS ───────────────────────────
+
+  /webhooks/whatsapp:
+    post:
+      tags: [Webhooks]
+      operationId: whatsappWebhook
+      summary: Inbound WhatsApp message webhook
+      description: |
+        Provider-signed inbound webhook. The gateway verifies
+        `X-Webhook-Signature` (HMAC-SHA256 of the raw body) and the provider's
+        sender allow-list before accepting.
+        Processing is asynchronous: the message is persisted and classified
+        (`PERSONAL | BUSINESS | CLIENT | PROJECT | URGENT | SPAM | UNKNOWN`) by the
+        agent; results surface via notifications, the daily brief, and events.
+        Duplicate `message_id`s are dropped (idempotent).
+      security:
+        - webhookSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookWhatsAppRequest'
+            example:
+              event: message.received
+              message_id: wamid.HBgM...
+              sender: "+963991234567"
+              text: "مرحبا محمد، بدي احكي معك بخصوص المشروع"
+              timestamp: "2026-09-11T20:00:00Z"
+      responses:
+        '202':
+          description: Message accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookWhatsAppResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Signature or sender validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: AUTHENTICATION_FAILED
+                  message: "Webhook signature validation failed"
+                  details: {}
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ─────────────────────────── EMAIL ───────────────────────────
+
+  /email/messages:
+    get:
+      tags: [Email]
+      operationId: listEmailMessages
+      summary: List email messages
+      description: |
+        Agent-processed inbox view (priority + classification computed by the agent
+        on ingestion). Requires `EMAIL.READ`.
+      parameters:
+        - name: folder
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/EmailFolder'
+          description: Defaults to `inbox`.
+        - name: priority
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/EmailPriority'
+        - name: classification
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/MessageClassification'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Message list
+          headers:
+            X-Total-Count:
+              $ref: '#/components/headers/XTotalCount'
+            X-Total-Pages:
+              $ref: '#/components/headers/XTotalPages'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /email/messages/{message_id}:
+    get:
+      tags: [Email]
+      operationId: getEmailMessage
+      summary: Get an email message
+      parameters:
+        - $ref: '#/components/parameters/MessageIdParam'
+      responses:
+        '200':
+          description: Message detail (includes body and agent analysis)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailGetResponse'
+              example:
+                success: true
+                data:
+                  id: msg_001
+                  folder: inbox
+                  sender: client@example.com
+                  subject: Project Update
+                  priority: HIGH
+                  classification: CLIENT
+                  summary: "..."
+                  required_action: "..."
+                  deadline: null
+                  body: "..."
+                  is_read: false
+                  received_at: "2026-09-11T18:00:00Z"
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /email/drafts:
+    post:
+      tags: [Email]
+      operationId: createEmailDraft
+      summary: Create an email draft
+      description: |
+        Creates a draft (never sends). Provide `reply_to` (message id) to derive
+        recipient + `Re:` subject, or `to` for a new thread.
+        Requires `EMAIL.DRAFT`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDraftRequest'
+            example:
+              reply_to: msg_001
+              body: "شكرا لرسالتك..."
+      responses:
+        '201':
+          description: Draft created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DraftResponse'
+              example:
+                success: true
+                data:
+                  id: draft_001
+                  reply_to: msg_001
+                  to: client@example.com
+                  subject: "Re: Project Update"
+                  body: "شكرا لرسالتك..."
+                  status: DRAFT
+                  approval_id: null
+                  sent_message_id: null
+                  created_at: "2026-09-11T20:00:00Z"
+                  updated_at: "2026-09-11T20:00:00Z"
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Missing EMAIL.DRAFT permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: reply_to message not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /email/send:
+    post:
+      tags: [Email]
+      operationId: sendEmail
+      summary: Send an email draft
+      description: |
+        Sends the draft through the pipeline
+        `PERMISSION CHECK → CONTENT POLICY → APPROVAL (if high-impact) → SEND → VERIFY → AUDIT`.
+        - High-impact messages (client commitments, financial, contractual) are blocked
+          with `409 APPROVAL_REQUIRED` — `error.details.approval_id` points to the
+          approval that must be granted first.
+        - **Idempotency is mandatory** (a retry must never double-send).
+        - Missing `EMAIL.SEND` permission → `403` (or `409 APPROVAL_REQUIRED`).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendEmailRequest'
+            example:
+              draft_id: draft_001
+      responses:
+        '200':
+          description: Email sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendEmailResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Draft not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Human approval required before sending (high-impact)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  code: APPROVAL_REQUIRED
+                  message: "Human approval is required before sending"
+                  details:
+                    approval_id: appr_001
+                    draft_id: draft_001
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
+
+  # ─────────────────────────── GITHUB ───────────────────────────
+
+  /integrations/github/repositories:
+    get:
+      tags: [GitHub]
+      operationId: listGitHubRepositories
+      summary: List connected GitHub repositories
+      description: Repositories tracked by the agent (linked to projects where applicable). Requires `GITHUB.READ`.
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Repository list
+          headers:
+            X-Total-Count:
+              $ref: '#/components/headers/XTotalCount'
+            X-Total-Pages:
+              $ref: '#/components/headers/XTotalPages'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepoListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
+
+  /github/repos/{repo_id}/status:
+    get:
+      tags: [GitHub]
+      operationId: getRepoStatus
+      summary: Get repository health status
+      description: Latest known/refreshed status of build, tests, deployment, open issues, and security alerts.
+      parameters:
+        - $ref: '#/components/parameters/RepoIdParam'
+      responses:
+        '200':
+          description: Repo status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepoStatusResponse'
+              example:
+                success: true
+                data:
+                  build: PASSING
+                  tests: PASSING
+                  deployment: HEALTHY
+                  open_issues: 3
+                  security_alerts: 0
+                  last_checked_at: "2026-09-11T20:00:00Z"
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
+
+  /github/issues:
+    post:
+      tags: [GitHub]
+      operationId: createGitHubIssue
+      summary: Create a GitHub issue
+      description: |
+        Used by the agent when monitoring detects a defect.
+        Requires `GITHUB.ISSUES`. `priority` is mapped to the repository's
+        priority labels (P0..P3).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIssueRequest'
+            example:
+              repository: owner/repository
+              title: API timeout
+              body: Detected during monitoring
+              priority: P1
+      responses:
+        '201':
+          description: Issue created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateIssueResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Missing GITHUB.ISSUES permission
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Repository not found or not tracked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
+
+  # ─────────────────────────── MONITORING ───────────────────────────
+
+  /monitoring/check:
+    post:
+      tags: [Monitoring]
+      operationId: monitoringCheck
+      summary: Run an active health check
+      description: |
+        Runs checks against a target: BUILD, DEPLOYMENT, API, DATABASE, UPTIME,
+        ERRORS, SECURITY, CI/CD (a subset can be requested via `checks`).
+        Findings are audit-logged; failures above a severity threshold raise
+        notifications/incidents automatically.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MonitoringCheckRequest'
+            example:
+              target_type: PROJECT
+              target_id: prj_sanaa
+      responses:
+        '200':
+          description: Check completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonitoringCheckResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Target not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ToolUnavailable'
+        '504':
+          $ref: '#/components/responses/Timeout'
+
+  # ─────────────────────────── AUTOMATIONS ───────────────────────────
+
+  /automations:
+    post:
+      tags: [Automations]
+      operationId: createAutomation
+      summary: Create an automation
+      description: |
+        Registers a scheduled/event-driven automation. The scheduler persists
+        `next_run_at`; each run is audit-logged and emits `automation.triggered`.
+        `SCHEDULE` triggers require a 5-field cron; `EVENT` triggers bind to an
+        internal event-bus name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAutomationRequest'
+            example:
+              name: Monitor SANAA
+              trigger:
+                type: SCHEDULE
+                cron: "*/15 * * * *"
+              action:
+                type: PROJECT_MONITOR
+                target: prj_sanaa
+              enabled: true
+      responses:
+        '201':
+          description: Automation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /automations/{automation_id}:
+    patch:
+      tags: [Automations]
+      operationId: updateAutomation
+      summary: Update an automation
+      description: "Partial update. Disabling (enabled: false) keeps state; re-enabling recomputes next_run_at."
+      parameters:
+        - $ref: '#/components/parameters/AutomationIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAutomationRequest'
+            example:
+              enabled: false
+      responses:
+        '200':
+          description: Automation updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutomationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ─────────────────────────── APPROVALS ───────────────────────────
+
+  /approvals:
+    get:
+      tags: [Approvals]
+      operationId: listApprovals
+      summary: List approvals
+      description: Pending (default) or decided approvals awaiting/informing the owner.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Defaults to PENDING.
+          schema:
+            default: PENDING
+            allOf:
+              - $ref: '#/components/schemas/ApprovalStatus'
+        - name: type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ApprovalType'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Approval list
+          headers:
+            X-Total-Count:
+              $ref: '#/components/headers/XTotalCount'
+            X-Total-Pages:
+              $ref: '#/components/headers/XTotalPages'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /approvals/{approval_id}/approve:
+    post:
+      tags: [Approvals]
+      operationId: approveApproval
+      summary: Approve a pending approval
+      description: |
+        Grants the requested action. If the pending action can start immediately
+        (e.g. an agent execution) it is dispatched and `data.execution_id` is set.
+        Only `OWNER` may decide. Deciding an already-decided approval → `409 CONFLICT`.
+      parameters:
+        - $ref: '#/components/parameters/ApprovalIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveRequest'
+            example:
+              approved: true
+      responses:
+        '200':
+          description: Approval granted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalDecisionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Only the OWNER role can decide approvals
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Approval already decided or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /approvals/{approval_id}/reject:
+    post:
+      tags: [Approvals]
+      operationId: rejectApproval
+      summary: Reject a pending approval
+      description: Blocks the requested action. The reason is stored and shown to the agent in the follow-up context.
+      parameters:
+        - $ref: '#/components/parameters/ApprovalIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectRequest'
+            example:
+              reason: Do not send this message
+      responses:
+        '200':
+          description: Approval rejected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalDecisionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ─────────────────────────── PERMISSIONS ───────────────────────────
+
+  /permissions:
+    get:
+      tags: [Permissions]
+      operationId: getPermissions
+      summary: Get current permission state
+      description: Effective permissions per integration for the authenticated principal.
+      responses:
+        '200':
+          description: Permission state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionsResponse'
+              example:
+                success: true
+                data:
+                  WHATSAPP: { READ: true, REPLY: true, SEND: false, MEDIA: false }
+                  EMAIL: { READ: true, DRAFT: true, SEND: false, DELETE: false }
+                  GITHUB: { READ: true, ISSUES: true, PULL_REQUEST: true, COMMIT: false, MERGE: false }
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /permissions/check:
+    post:
+      tags: [Permissions]
+      operationId: checkPermission
+      summary: Check a permission before acting
+      description: |
+        Every internal action MUST pass this check in the Tool Router before
+        dispatch. A result of `allowed: false, requires_approval: true` means the
+        action may proceed only after a human approval is granted — it is NOT a
+        hard denial.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PermissionCheckRequest'
+            example:
+              resource: EMAIL
+              action: SEND
+              target: msg_001
+      responses:
+        '200':
+          description: Check result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionCheckResponse'
+              example:
+                success: true
+                data:
+                  allowed: false
+                  reason: Human approval required
+                  requires_approval: true
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ─────────────────────────── NOTIFICATIONS ───────────────────────────
+
+  /notifications:
+    post:
+      tags: [Notifications]
+      operationId: createNotification
+      summary: Emit a notification
+      description: |
+        Severity-based routing when `channel` is omitted:
+        `CRITICAL → PUSH + WHATSAPP`, `HIGH → PUSH`, `MEDIUM → DAILY_BRIEF`,
+        `LOW → DASHBOARD`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateNotificationRequest'
+            example:
+              severity: CRITICAL
+              channel: PUSH
+              title: Production Down
+              message: SANAA production endpoint is unavailable
+      responses:
+        '201':
+          description: Notification accepted and routed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
+
+  # ─────────────────────────── AUDIT ───────────────────────────
+
+  /audit:
+    get:
+      tags: [Audit]
+      operationId: listAudit
+      summary: Query the audit trail
+      description: |
+        Append-only, immutable log of every agent/user action. Read-only via API —
+        no update/delete operations exist by design. Requires `AUDIT.READ`.
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^prj_[a-z0-9]+$'
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact action name (e.g. PROJECT_MONITOR).
+        - name: actor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Actor id or principal (e.g. agent, usr_001).
+        - name: result
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AuditResult'
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: Audit records (newest first)
+          headers:
+            X-Total-Count:
+              $ref: '#/components/headers/XTotalCount'
+            X-Total-Pages:
+              $ref: '#/components/headers/XTotalPages'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditListResponse'
+              example:
+                success: true
+                data:
+                  - id: 48213
+                    timestamp: "2026-09-11T20:15:00Z"
+                    actor_type: agent
+                    actor: agent
+                    action: PROJECT_MONITOR
+                    target_type: project
+                    target_id: prj_sanaa
+                    project_id: prj_sanaa
+                    result: SUCCESS
+                    execution_id: exec_001
+                    command_id: null
+                    request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                    details: {}
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ─────────────────────────── INCIDENTS ───────────────────────────
+
+  /incidents:
+    post:
+      tags: [Incidents]
+      operationId: createIncident
+      summary: Open an emergency incident
+      description: |
+        Raises a CRITICAL-path incident: immediate notification routing
+        (PUSH + WHATSAPP), an `incident.created` event, and the agent's
+        incident-response workflow. Idempotent per `Idempotency-Key`
+        (a retry never opens a second incident).
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIncidentRequest'
+            example:
+              severity: CRITICAL
+              system: SANAA
+              issue: Database unavailable
+              impact: Production unavailable
+      responses:
+        '201':
+          description: Incident opened
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentResponse'
+              example:
+                success: true
+                data:
+                  incident_id: inc_001
+                  status: OPEN
+                  severity: CRITICAL
+                  system: SANAA
+                  created_at: "2026-09-11T20:10:00Z"
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:10:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ─────────────────────────── SYSTEM ───────────────────────────
+
+  /health:
+    get:
+      tags: [System]
+      operationId: health
+      summary: Liveness/readiness probe
+      description: Unauthenticated. Always HTTP 200; the `status` field carries the verdict (used by the load balancer and the dashboard).
+      security: []
+      responses:
+        '200':
+          description: Health
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                success: true
+                data:
+                  status: healthy
+                  services:
+                    database: healthy
+                    redis: healthy
+                    agent: healthy
+                    scheduler: healthy
+                    notifications: healthy
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+
+  /system/status:
+    get:
+      tags: [System]
+      operationId: systemStatus
+      summary: System status overview
+      description: "Owner-facing status: system, agent, automation scheduler, security, and integrations."
+      responses:
+        '200':
+          description: System status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemStatusResponse'
+              example:
+                success: true
+                data:
+                  system: OPERATIONAL
+                  agent: READY
+                  automation: ACTIVE
+                  security: PROTECTED
+                  integrations:
+                    whatsapp: CONNECTED
+                    email: CONNECTED
+                    github: CONNECTED
+                request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                timestamp: "2026-09-11T20:00:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  # ─────────────────────────── DAILY BRIEF ───────────────────────────
+
+  /brief/daily:
+    get:
+      tags: [Brief]
+      operationId: getDailyBrief
+      summary: Get the daily brief
+      description: |
+        The owner's morning digest: critical/high items, tasks, emails, WhatsApp,
+        projects, deadlines, what the agent did (`actions_taken`), and what comes
+        next (`next_actions`). Arrays are empty (never null) when there is nothing.
+      parameters:
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Brief date (UTC). Defaults to today.
+      responses:
+        '200':
+          description: Daily brief
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyBriefResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token issued by `POST /auth/login` (1h) — refresh via `POST /auth/refresh`.
+    webhookSignature:
+      type: apiKey
+      in: header
+      name: X-Webhook-Signature
+      description: HMAC-SHA256 hex digest of the raw request body, keyed with the provider's shared webhook secret.
+
+  parameters:
+    RequestIdHeader:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: Optional client-generated correlation id (max 64 chars). When absent, the gateway generates one and returns it in the envelope.
+      schema:
+        type: string
+        maxLength: 64
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Client-generated unique key (UUID or ULID recommended). Retries carrying the
+        same key receive the original response without re-executing the operation —
+        this is what prevents double sends and double executions. Keys are retained 24h.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._-]{8,128}$'
+        example: 7c9a4f2e-6b1d-4e8a-9c3f-1a2b3c4d5e6f
+    PageParam:
+      name: page
+      in: query
+      required: false
+      description: 1-based page number.
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSizeParam:
+      name: page_size
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    ProjectIdParam:
+      name: project_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^prj_[a-z0-9]+$'
+        example: prj_sanaa
+    TaskIdParam:
+      name: task_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^ts_[a-z0-9]+$'
+        example: ts_001
+    MemoryIdParam:
+      name: memory_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^mem_[a-z0-9]+$'
+        example: mem_001
+    MessageIdParam:
+      name: message_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^msg_[a-z0-9]+$'
+        example: msg_001
+    RepoIdParam:
+      name: repo_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^repo_[a-z0-9]+$'
+        example: repo_001
+    ApprovalIdParam:
+      name: approval_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^appr_[a-z0-9]+$'
+        example: appr_001
+    AutomationIdParam:
+      name: automation_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^auto_[a-z0-9]+$'
+        example: auto_001
+
+  headers:
+    XTotalCount:
+      description: Total number of records matching the query.
+      schema:
+        type: integer
+        minimum: 0
+    XTotalPages:
+      description: Total number of pages for the given page size.
+      schema:
+        type: integer
+        minimum: 0
+    XRateLimitReset:
+      description: Unix epoch seconds at which the rate-limit window resets.
+      schema:
+        type: integer
+        minimum: 0
+
+  responses:
+    BadRequest:
+      description: Malformed request or failed validation (`VALIDATION_ERROR`; field problems in `error.details.fields`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Missing/invalid/expired credentials (`AUTHENTICATION_FAILED` or `INVALID_TOKEN`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Authenticated but not permitted (`PERMISSION_DENIED`; required permission in `error.details.required`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource does not exist (`RESOURCE_NOT_FOUND`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: State conflict (`CONFLICT`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ApprovalRequired:
+      description: Human approval required before proceeding (`APPROVAL_REQUIRED`; `error.details.approval_id`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: Rate limit exceeded (`RATE_LIMITED`).
+      headers:
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/XRateLimitReset'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            error:
+              code: RATE_LIMITED
+              message: "Rate limit exceeded, retry after the reset"
+              details: {}
+            request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+            timestamp: "2026-09-11T20:00:00Z"
+    IntegrationOffline:
+      description: External provider not connected/unreachable (`INTEGRATION_OFFLINE`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ToolUnavailable:
+      description: Internal tool/checker not available right now (`TOOL_UNAVAILABLE`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Timeout:
+      description: Operation timed out (`TIMEOUT`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: Internal failure (`EXECUTION_FAILED` or `DEPENDENCY_FAILURE`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+
+    # ─────────── Envelope ───────────
+
+    SuccessEnvelope:
+      type: object
+      description: Base of every successful response.
+      required: [success, request_id, timestamp]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        request_id:
+          type: string
+          description: Unique correlation id assigned by the gateway.
+          example: req_01J9ZK7Q3M4N5P6R7S8T9V
+        timestamp:
+          type: string
+          format: date-time
+          description: Server response time, ISO-8601 UTC.
+          example: "2026-09-11T20:00:00Z"
+
+    ErrorCode:
+      type: string
+      description: Fixed error-code set. Do not introduce new codes without a spec revision.
+      enum:
+        - AUTHENTICATION_FAILED
+        - INVALID_TOKEN
+        - PERMISSION_DENIED
+        - APPROVAL_REQUIRED
+        - VALIDATION_ERROR
+        - RESOURCE_NOT_FOUND
+        - CONFLICT
+        - RATE_LIMITED
+        - INTEGRATION_OFFLINE
+        - TOOL_UNAVAILABLE
+        - EXECUTION_FAILED
+        - VERIFICATION_FAILED
+        - TIMEOUT
+        - DEPENDENCY_FAILURE
+        - SECRET_ACCESS_DENIED
+
+    ErrorResponse:
+      type: object
+      description: Base of every error response.
+      required: [success, error, request_id, timestamp]
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string
+              description: Human-readable message (may be localized).
+            details:
+              type: object
+              additionalProperties: true
+              description: Structured context — field errors, approval_id, required permission, policy name, ...
+        request_id:
+          type: string
+          example: req_01J9ZK7Q3M4N5P6R7S8T9V
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-09-11T20:00:00Z"
+
+    # ─────────── Shared enums ───────────
+
+    Priority:
+      type: string
+      description: P0 = critical (drop everything) ... P3 = lowest.
+      enum: [P0, P1, P2, P3]
+
+    ProjectStatus:
+      type: string
+      enum: [ACTIVE, ON_HOLD, PAUSED, COMPLETED, ARCHIVED]
+
+    TaskStatus:
+      type: string
+      description: DONE is only reachable through the verification-gated completion flow.
+      enum: [TODO, IN_PROGRESS, BLOCKED, IN_REVIEW, DONE, CANCELLED]
+
+    MessageClassification:
+      type: string
+      description: Agent classification for inbound WhatsApp/email messages.
+      enum: [PERSONAL, BUSINESS, CLIENT, PROJECT, URGENT, SPAM, UNKNOWN]
+
+    # ─────────── Auth ───────────
+
+    UserPublic:
+      type: object
+      required: [id, role]
+      properties:
+        id:
+          type: string
+          pattern: '^usr_[a-z0-9]+$'
+          example: usr_001
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          type: string
+          description: RBAC role. `AGENT` is the service principal of the internal agent.
+          enum: [OWNER, AGENT, VIEWER]
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+
+    LoginData:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_in, user]
+      properties:
+        access_token:
+          type: string
+          description: JWT access token.
+        refresh_token:
+          type: string
+          description: Opaque refresh token (rotated on each use).
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: Access-token lifetime in seconds.
+          example: 3600
+        user:
+          $ref: '#/components/schemas/UserPublic'
+
+    LoginResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/LoginData'
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    LogoutResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: 'null'
+              description: Always null — session invalidated.
+
+    # ─────────── Agent ───────────
+
+    AgentStatus:
+      type: string
+      description: Command/execution lifecycle state.
+      enum: [PLANNED, WAITING_APPROVAL, RUNNING, VERIFYING, COMPLETED, FAILED, BLOCKED, CANCELLED]
+
+    StepStatus:
+      type: string
+      description: Single plan-step state.
+      enum: [PENDING, RUNNING, WAITING_APPROVAL, COMPLETED, FAILED, BLOCKED, SKIPPED]
+
+    PlanStep:
+      type: object
+      required: [task, status]
+      properties:
+        task:
+          type: string
+          description: Planner task type (e.g. GET_PROJECT_STATUS, CHECK_OPEN_ISSUES, CHECK_DEPLOYMENT, SEND_NOTIFICATION).
+          example: GET_PROJECT_STATUS
+        status:
+          $ref: '#/components/schemas/StepStatus'
+        detail:
+          type: object
+          additionalProperties: true
+          description: Optional per-step context (parameters, error, output reference).
+
+    AgentCommandRequest:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: Natural-language command (Arabic or English).
+          example: "تابعلي مشروع SANAA"
+        source:
+          type: string
+          description: Where the command came from.
+          default: dashboard
+          enum: [dashboard, whatsapp, email, api, automation, voice, cli]
+        conversation_id:
+          anyOf:
+            - type: string
+              pattern: '^conv_[a-z0-9]+$'
+            - type: 'null'
+          description: Ongoing conversation to attach the command to (for context continuity).
+        autonomous:
+          type: boolean
+          description: When true, permitted steps run without a second confirmation; steps that still require approval are paused at WAITING_APPROVAL.
+          default: false
+
+    AgentCommandData:
+      type: object
+      required: [command_id, intent, status, plan]
+      properties:
+        command_id:
+          type: string
+          pattern: '^cmd_[a-z0-9]+$'
+          example: cmd_001
+        intent:
+          type: string
+          description: |
+            Classified intent. Known v1 intents: PROJECT_MONITORING, TASK_MANAGEMENT,
+            EMAIL_COMPOSITION, MESSAGE_REPLY, RESEARCH, INCIDENT_RESPONSE, GENERAL.
+            Open set — the Planner may introduce new intents with a spec note.
+          example: PROJECT_MONITORING
+        status:
+          $ref: '#/components/schemas/AgentStatus'
+        plan:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/PlanStep'
+
+    AgentCommandResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/AgentCommandData'
+
+    AgentExecuteRequest:
+      type: object
+      required: [command_id]
+      properties:
+        command_id:
+          type: string
+          pattern: '^cmd_[a-z0-9]+$'
+          example: cmd_001
+        approval_id:
+          anyOf:
+            - type: string
+              pattern: '^appr_[a-z0-9]+$'
+            - type: 'null'
+          description: Approval id when execution was gated on a now-granted approval; null otherwise.
+
+    AgentExecuteData:
+      type: object
+      required: [execution_id, command_id, status]
+      properties:
+        execution_id:
+          type: string
+          pattern: '^exec_[a-z0-9]+$'
+          example: exec_001
+        command_id:
+          type: string
+          pattern: '^cmd_[a-z0-9]+$'
+        status:
+          $ref: '#/components/schemas/AgentStatus'
+          description: Usually RUNNING immediately after acceptance; the final state is delivered via events/notifications/audit.
+
+    AgentExecuteResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/AgentExecuteData'
+
+    # ─────────── Projects ───────────
+
+    RepositoryRef:
+      type: object
+      properties:
+        repo_id:
+          type: string
+          pattern: '^repo_[a-z0-9]+$'
+        url:
+          type: string
+          format: uri
+        branch:
+          type: string
+          example: main
+
+    DeploymentRef:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+        environment:
+          type: string
+          enum: [development, staging, production]
+        status:
+          type: string
+          enum: [HEALTHY, DEGRADED, DOWN, UNKNOWN]
+        last_deployed_at:
+          type: string
+          format: date-time
+
+    ProjectSummary:
+      type: object
+      required: [id, name, status, priority, version]
+      properties:
+        id:
+          type: string
+          pattern: '^prj_[a-z0-9]+$'
+          example: prj_sanaa
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          example: SANAA
+        status:
+          $ref: '#/components/schemas/ProjectStatus'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        version:
+          type: string
+          pattern: '^[0-9]+(\.[0-9]+){0,2}(-[A-Za-z0-9.]+)?$'
+          example: "1.0"
+
+    ProjectDetail:
+      allOf:
+        - $ref: '#/components/schemas/ProjectSummary'
+        - type: object
+          properties:
+            description:
+              type: string
+              example: "منصة طلب الخدمات والحرفيين"
+            repository:
+              $ref: '#/components/schemas/RepositoryRef'
+            deployment:
+              $ref: '#/components/schemas/DeploymentRef'
+            tasks:
+              type: object
+              required: [total, open]
+              properties:
+                total:
+                  type: integer
+                  minimum: 0
+                open:
+                  type: integer
+                  minimum: 0
+                overdue:
+                  type: integer
+                  minimum: 0
+            bugs:
+              type: object
+              required: [open, critical]
+              properties:
+                open:
+                  type: integer
+                  minimum: 0
+                critical:
+                  type: integer
+                  minimum: 0
+            security_issues:
+              type: object
+              required: [open, critical]
+              properties:
+                open:
+                  type: integer
+                  minimum: 0
+                critical:
+                  type: integer
+                  minimum: 0
+            dependencies:
+              type: object
+              required: [outdated, critical]
+              properties:
+                outdated:
+                  type: integer
+                  minimum: 0
+                critical:
+                  type: integer
+                  minimum: 0
+            integrations:
+              type: array
+              items:
+                type: object
+                required: [provider, status]
+                properties:
+                  provider:
+                    type: string
+                    enum: [whatsapp, email, github]
+                  status:
+                    type: string
+                    enum: [CONNECTED, DISCONNECTED, DEGRADED]
+            last_activity_at:
+              type: string
+              format: date-time
+            next_action:
+              type: string
+              example: Production deployment
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    CreateProjectRequest:
+      type: object
+      required: [name, priority]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 5000
+        priority:
+          $ref: '#/components/schemas/Priority'
+        version:
+          type: string
+          pattern: '^[0-9]+(\.[0-9]+){0,2}(-[A-Za-z0-9.]+)?$'
+          default: "0.1"
+        repository_url:
+          type: string
+          format: uri
+        deployment_url:
+          type: string
+          format: uri
+
+    UpdateProjectRequest:
+      type: object
+      minProperties: 1
+      properties:
+        status:
+          $ref: '#/components/schemas/ProjectStatus'
+        version:
+          type: string
+          pattern: '^[0-9]+(\.[0-9]+){0,2}(-[A-Za-z0-9.]+)?$'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        description:
+          type: string
+          maxLength: 5000
+        next_action:
+          type: string
+        repository_url:
+          type: string
+          format: uri
+        deployment_url:
+          type: string
+          format: uri
+
+    ProjectResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/ProjectDetail'
+
+    ProjectListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/ProjectSummary'
+
+    # ─────────── Tasks ───────────
+
+    TaskVerification:
+      type: object
+      required: [required, status]
+      properties:
+        required:
+          type: boolean
+          description: Whether completion must pass independent verification.
+        status:
+          type: string
+          enum: [NOT_REQUIRED, PENDING, PASSED, FAILED]
+        verified_by:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: Principal that performed the verification (user id / agent / system check).
+        verified_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+
+    Task:
+      type: object
+      required: [id, project_id, title, priority, status, verification, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          pattern: '^ts_[a-z0-9]+$'
+          example: ts_001
+        project_id:
+          type: string
+          pattern: '^prj_[a-z0-9]+$'
+          example: prj_sanaa
+        title:
+          type: string
+          minLength: 1
+          maxLength: 300
+          example: "فحص API authentication"
+        description:
+          anyOf:
+            - type: string
+            - type: 'null'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        assignee:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: User id or agent principal.
+        due_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        completed_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          description: Set when verification passes (or is not required).
+        verification:
+          $ref: '#/components/schemas/TaskVerification'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateTaskRequest:
+      type: object
+      required: [project_id, title, priority]
+      properties:
+        project_id:
+          type: string
+          pattern: '^prj_[a-z0-9]+$'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 300
+        description:
+          type: string
+          maxLength: 5000
+        priority:
+          $ref: '#/components/schemas/Priority'
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+          default: TODO
+          description: Only TODO/IN_PROGRESS/BLOCKED allowed at creation.
+        assignee:
+          type: string
+        due_at:
+          type: string
+          format: date-time
+
+    UpdateTaskRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 300
+        description:
+          type: string
+          maxLength: 5000
+        priority:
+          $ref: '#/components/schemas/Priority'
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+          description: DONE is rejected here (400 VALIDATION_ERROR) — use the completion endpoint.
+        assignee:
+          type: string
+        due_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+
+    TaskResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/Task'
+
+    TaskListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/Task'
+
+    TaskCompleteRequest:
+      type: object
+      required: [verification]
+      properties:
+        verification:
+          type: object
+          required: [required]
+          properties:
+            required:
+              type: boolean
+              description: true → the task must pass independent verification before DONE.
+
+    TaskCompleteData:
+      type: object
+      required: [task_id, status, verification_status]
+      properties:
+        task_id:
+          type: string
+          pattern: '^ts_[a-z0-9]+$'
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+          description: DONE when verification is not required or already passed; IN_REVIEW while verification is pending.
+        verification_status:
+          type: string
+          enum: [NOT_REQUIRED, PENDING, PASSED, FAILED]
+        verification_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+
+    TaskCompleteResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/TaskCompleteData'
+
+    # ─────────── Memory ───────────
+
+    MemoryType:
+      type: string
+      enum: [USER_PROFILE, PROJECT_MEMORY, CONTACT, TASK, DECISION, PREFERENCE, DEADLINE, CONVERSATION, AUTOMATION]
+
+    MemorySource:
+      type: string
+      description: Where the fact came from. `verified` = confirmed by an external system or the owner.
+      enum: [agent, user, integration, verified, inference]
+
+    MemoryRecord:
+      type: object
+      required: [id, type, key, value, source, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          pattern: '^mem_[a-z0-9]+$'
+          example: mem_001
+        type:
+          $ref: '#/components/schemas/MemoryType'
+        key:
+          type: string
+          maxLength: 200
+          description: Dotted, greppable key (e.g. sanaa.current_version).
+          example: sanaa.current_version
+        value:
+          description: Arbitrary JSON value (string, number, boolean, object, or array).
+        project_id:
+          anyOf:
+            - type: string
+              pattern: '^prj_[a-z0-9]+$'
+            - type: 'null'
+        source:
+          $ref: '#/components/schemas/MemorySource'
+        confidence:
+          anyOf:
+            - type: number
+              minimum: 0
+              maximum: 1
+            - type: 'null'
+          description: Confidence of agent-derived facts (null for verified/user facts).
+        expires_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          description: Optional TTL; expired records are purged by the scheduler.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateMemoryRequest:
+      type: object
+      required: [type, key, value]
+      properties:
+        type:
+          $ref: '#/components/schemas/MemoryType'
+        key:
+          type: string
+          minLength: 1
+          maxLength: 200
+        value:
+          description: Arbitrary JSON value.
+        project_id:
+          anyOf:
+            - type: string
+              pattern: '^prj_[a-z0-9]+$'
+            - type: 'null'
+        source:
+          $ref: '#/components/schemas/MemorySource'
+          default: agent
+        expires_at:
+          type: string
+          format: date-time
+
+    MemoryResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/MemoryRecord'
+
+    MemoryListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/MemoryRecord'
+
+    MemoryDeleteData:
+      type: object
+      required: [memory_id, deleted]
+      properties:
+        memory_id:
+          type: string
+          pattern: '^mem_[a-z0-9]+$'
+        deleted:
+          type: boolean
+          enum: [true]
+
+    MemoryDeleteResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/MemoryDeleteData'
+
+    # ─────────── WhatsApp ───────────
+
+    E164:
+      type: string
+      description: E.164 phone number.
+      pattern: '^\+[1-9]\d{7,14}$'
+      example: "+963991234567"
+
+    WhatsAppPermission:
+      type: string
+      enum: [READ, REPLY, SEND, MEDIA]
+
+    WhatsAppStatusData:
+      type: object
+      required: [connected, provider, permissions]
+      properties:
+        connected:
+          type: boolean
+        provider:
+          type: string
+          enum: [whatsapp]
+        permissions:
+          type: array
+          description: Currently granted permissions (empty when disconnected).
+          items:
+            $ref: '#/components/schemas/WhatsAppPermission'
+        last_checked_at:
+          type: string
+          format: date-time
+
+    WhatsAppStatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/WhatsAppStatusData'
+
+    SendWhatsAppRequest:
+      type: object
+      required: [recipient, message]
+      properties:
+        recipient:
+          $ref: '#/components/schemas/E164'
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          example: "مرحبا، محمد مشغول حاليا."
+
+    SendWhatsAppData:
+      type: object
+      required: [message_id, status]
+      properties:
+        message_id:
+          type: string
+          pattern: '^wmsg_[a-z0-9]+$'
+        status:
+          type: string
+          enum: [QUEUED, SENT]
+        audit_id:
+          anyOf:
+            - type: integer
+              format: int64
+            - type: 'null'
+          description: Audit-log entry recording the send.
+
+    SendWhatsAppResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/SendWhatsAppData'
+
+    WebhookWhatsAppRequest:
+      type: object
+      required: [event, message_id, sender, text, timestamp]
+      properties:
+        event:
+          type: string
+          enum: [message.received]
+        message_id:
+          type: string
+          description: Provider message id (used for duplicate suppression).
+          example: wamid.HBgM...
+        sender:
+          $ref: '#/components/schemas/E164'
+        text:
+          type: string
+          minLength: 1
+          maxLength: 65536
+        timestamp:
+          type: string
+          format: date-time
+
+    WebhookWhatsAppData:
+      type: object
+      required: [status, message_id]
+      properties:
+        status:
+          type: string
+          enum: [ACCEPTED]
+        message_id:
+          type: string
+          description: Internal stored message id (`wmsg_...`).
+        conversation_id:
+          anyOf:
+            - type: string
+              pattern: '^conv_[a-z0-9]+$'
+            - type: 'null'
+          description: Conversation the message was attached to.
+
+    WebhookWhatsAppResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/WebhookWhatsAppData'
+
+    # ─────────── Email ───────────
+
+    EmailFolder:
+      type: string
+      enum: [inbox, sent, drafts, spam, trash, archive]
+
+    EmailPriority:
+      type: string
+      description: Agent-assessed priority.
+      enum: [LOW, NORMAL, HIGH, URGENT]
+
+    EmailMessage:
+      type: object
+      required: [id, folder, sender, subject, priority, classification, summary, received_at]
+      properties:
+        id:
+          type: string
+          pattern: '^msg_[a-z0-9]+$'
+          example: msg_001
+        folder:
+          $ref: '#/components/schemas/EmailFolder'
+        sender:
+          type: string
+          format: email
+          example: client@example.com
+        subject:
+          type: string
+          example: Project Update
+        priority:
+          $ref: '#/components/schemas/EmailPriority'
+        classification:
+          $ref: '#/components/schemas/MessageClassification'
+        summary:
+          type: string
+          description: Agent-generated one-paragraph summary.
+        required_action:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: What the owner should do (null = none / FYI).
+        deadline:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          description: Extracted deadline, if any.
+        received_at:
+          type: string
+          format: date-time
+
+    EmailMessageFull:
+      allOf:
+        - $ref: '#/components/schemas/EmailMessage'
+        - type: object
+          required: [body]
+          properties:
+            body:
+              type: string
+            is_read:
+              type: boolean
+
+    EmailListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/EmailMessage'
+
+    EmailGetResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/EmailMessageFull'
+
+    CreateDraftRequest:
+      type: object
+      required: [body]
+      properties:
+        reply_to:
+          anyOf:
+            - type: string
+              pattern: '^msg_[a-z0-9]+$'
+            - type: 'null'
+          description: "Message id to reply to (recipient and Re: subject are derived)."
+        to:
+          anyOf:
+            - type: string
+              format: email
+            - type: 'null'
+          description: Recipient for a new thread. Exactly one of `reply_to` / `to` is required.
+        subject:
+          type: string
+          maxLength: 300
+          description: "Ignored when reply_to is provided (Re: subject is derived)."
+        body:
+          type: string
+          minLength: 1
+          maxLength: 100000
+
+    EmailDraft:
+      type: object
+      required: [id, to, subject, body, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          pattern: '^draft_[a-z0-9]+$'
+          example: draft_001
+        reply_to:
+          anyOf:
+            - type: string
+            - type: 'null'
+        to:
+          type: string
+          format: email
+        subject:
+          type: string
+        body:
+          type: string
+        status:
+          type: string
+          enum: [DRAFT, APPROVAL_PENDING, SENT, REJECTED, DISCARDED]
+        approval_id:
+          anyOf:
+            - type: string
+              pattern: '^appr_[a-z0-9]+$'
+            - type: 'null'
+        sent_message_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: Set after a successful send.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    DraftResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/EmailDraft'
+
+    SendEmailRequest:
+      type: object
+      required: [draft_id]
+      properties:
+        draft_id:
+          type: string
+          pattern: '^draft_[a-z0-9]+$'
+          example: draft_001
+        approval_id:
+          anyOf:
+            - type: string
+              pattern: '^appr_[a-z0-9]+$'
+            - type: 'null'
+          description: Pass the granted approval id when the previous attempt returned APPROVAL_REQUIRED.
+
+    SendEmailData:
+      type: object
+      required: [message_id, draft_id, status]
+      properties:
+        message_id:
+          type: string
+          pattern: '^msg_[a-z0-9]+$'
+        draft_id:
+          type: string
+          pattern: '^draft_[a-z0-9]+$'
+        status:
+          type: string
+          enum: [SENT]
+
+    SendEmailResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/SendEmailData'
+
+    # ─────────── GitHub ───────────
+
+    GitHubRepo:
+      type: object
+      required: [id, full_name, owner, name]
+      properties:
+        id:
+          type: string
+          pattern: '^repo_[a-z0-9]+$'
+          example: repo_001
+        full_name:
+          type: string
+          pattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          example: mody101220/MG-LABS
+        owner:
+          type: string
+          example: mody101220
+        name:
+          type: string
+          example: MG-LABS
+        default_branch:
+          type: string
+          example: main
+        is_private:
+          type: boolean
+        project_id:
+          anyOf:
+            - type: string
+              pattern: '^prj_[a-z0-9]+$'
+            - type: 'null'
+          description: Linked project, if any.
+        last_checked_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+
+    RepoStatusData:
+      type: object
+      required: [build, tests, deployment, open_issues, security_alerts]
+      properties:
+        build:
+          type: string
+          enum: [PASSING, FAILING, UNKNOWN]
+        tests:
+          type: string
+          enum: [PASSING, FAILING, RUNNING, UNKNOWN]
+        deployment:
+          type: string
+          enum: [HEALTHY, DEGRADED, DOWN, UNKNOWN]
+        open_issues:
+          type: integer
+          minimum: 0
+        security_alerts:
+          type: integer
+          minimum: 0
+        last_checked_at:
+          type: string
+          format: date-time
+
+    RepoListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/GitHubRepo'
+
+    RepoStatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/RepoStatusData'
+
+    CreateIssueRequest:
+      type: object
+      required: [repository, title]
+      properties:
+        repository:
+          type: string
+          pattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          description: In "owner/repository" format.
+          example: owner/repository
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: API timeout
+        body:
+          type: string
+          maxLength: 65536
+          example: Detected during monitoring
+        priority:
+          $ref: '#/components/schemas/Priority'
+        labels:
+          type: array
+          items:
+            type: string
+
+    CreateIssueData:
+      type: object
+      required: [issue_id, number, repository, title, priority, status]
+      properties:
+        issue_id:
+          type: string
+          pattern: '^iss_[a-z0-9]+$'
+        number:
+          type: integer
+          minimum: 1
+          description: GitHub issue number.
+        repository:
+          type: string
+          example: owner/repository
+        title:
+          type: string
+        priority:
+          $ref: '#/components/schemas/Priority'
+        status:
+          type: string
+          enum: [OPEN, CLOSED]
+        url:
+          type: string
+          format: uri
+
+    CreateIssueResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/CreateIssueData'
+
+    # ─────────── Monitoring ───────────
+
+    CheckType:
+      type: string
+      enum: [BUILD, DEPLOYMENT, API, DATABASE, UPTIME, ERRORS, SECURITY, CICD]
+
+    MonitoringCheckRequest:
+      type: object
+      required: [target_type, target_id]
+      properties:
+        target_type:
+          type: string
+          enum: [PROJECT, REPOSITORY, SERVICE, URL]
+          example: PROJECT
+        target_id:
+          type: string
+          example: prj_sanaa
+        checks:
+          type: array
+          description: Subset of checks to run; defaults to all applicable checks.
+          items:
+            $ref: '#/components/schemas/CheckType'
+
+    CheckResultItem:
+      type: object
+      required: [check, status]
+      properties:
+        check:
+          $ref: '#/components/schemas/CheckType'
+        status:
+          type: string
+          enum: [PASSING, FAILING, WARNING, UNKNOWN, SKIPPED]
+        detail:
+          anyOf:
+            - type: string
+            - type: 'null'
+
+    MonitoringCheckData:
+      type: object
+      required: [check_id, target_type, target_id, status, results]
+      properties:
+        check_id:
+          type: string
+          pattern: '^chk_[a-z0-9]+$'
+        target_type:
+          type: string
+          enum: [PROJECT, REPOSITORY, SERVICE, URL]
+        target_id:
+          type: string
+        status:
+          type: string
+          description: Aggregate verdict.
+          enum: [HEALTHY, DEGRADED, CRITICAL, UNKNOWN]
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/CheckResultItem'
+        started_at:
+          type: string
+          format: date-time
+        duration_ms:
+          type: integer
+          minimum: 0
+
+    MonitoringCheckResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/MonitoringCheckData'
+
+    # ─────────── Automations ───────────
+
+    TriggerType:
+      type: string
+      enum: [SCHEDULE, EVENT, MANUAL]
+
+    Trigger:
+      type: object
+      required: [type]
+      properties:
+        type:
+          $ref: '#/components/schemas/TriggerType'
+        cron:
+          type: string
+          description: 5-field cron expression (UTC). Required when type = SCHEDULE.
+          example: "*/15 * * * *"
+        event:
+          type: string
+          description: Internal event-bus name. Required when type = EVENT.
+          example: deployment.failed
+        interval_seconds:
+          type: integer
+          minimum: 60
+          description: Optional fixed interval alternative for SCHEDULE.
+
+    ActionType:
+      type: string
+      description: Known v1 action types.
+      enum: [PROJECT_MONITOR, RUN_CHECK, CREATE_TASK, SEND_NOTIFICATION, SEND_EMAIL_DRAFT]
+
+    Action:
+      type: object
+      required: [type]
+      properties:
+        type:
+          $ref: '#/components/schemas/ActionType'
+        target:
+          type: string
+          description: Target id (project, repository, ...).
+          example: prj_sanaa
+        params:
+          type: object
+          additionalProperties: true
+          description: Action-specific parameters.
+
+    Automation:
+      type: object
+      required: [id, name, trigger, action, enabled, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          pattern: '^auto_[a-z0-9]+$'
+          example: auto_001
+        name:
+          type: string
+          minLength: 1
+          maxLength: 160
+          example: Monitor SANAA
+        description:
+          anyOf:
+            - type: string
+            - type: 'null'
+        trigger:
+          $ref: '#/components/schemas/Trigger'
+        action:
+          $ref: '#/components/schemas/Action'
+        enabled:
+          type: boolean
+        last_run_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        last_run_status:
+          anyOf:
+            - type: string
+              enum: [SUCCESS, FAILURE, SKIPPED]
+            - type: 'null'
+        next_run_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateAutomationRequest:
+      type: object
+      required: [name, trigger, action]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 160
+        description:
+          type: string
+          maxLength: 500
+        trigger:
+          $ref: '#/components/schemas/Trigger'
+        action:
+          $ref: '#/components/schemas/Action'
+        enabled:
+          type: boolean
+          default: true
+
+    UpdateAutomationRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 160
+        description:
+          type: string
+          maxLength: 500
+        trigger:
+          $ref: '#/components/schemas/Trigger'
+        action:
+          $ref: '#/components/schemas/Action'
+        enabled:
+          type: boolean
+
+    AutomationResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/Automation'
+
+    # ─────────── Approvals ───────────
+
+    ApprovalType:
+      type: string
+      enum: [AGENT_EXECUTION, EMAIL_SEND, WHATSAPP_SEND, GENERIC]
+
+    ApprovalStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED, EXPIRED, CANCELLED]
+
+    Approval:
+      type: object
+      required: [id, type, status, requested_by, payload, requested_at]
+      properties:
+        id:
+          type: string
+          pattern: '^appr_[a-z0-9]+$'
+          example: appr_001
+        type:
+          $ref: '#/components/schemas/ApprovalType'
+        status:
+          $ref: '#/components/schemas/ApprovalStatus'
+        payload:
+          type: object
+          additionalProperties: true
+          description: The exact action requested (draft id + recipient, plan steps, ...).
+        request_reason:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: Why the agent is asking.
+        requested_by:
+          type: string
+          description: Requesting principal.
+          example: agent
+        decided_by:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: User id who decided.
+        decision_reason:
+          anyOf:
+            - type: string
+            - type: 'null'
+        expires_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          description: Expired approvals are auto-cancelled by the scheduler.
+        requested_at:
+          type: string
+          format: date-time
+        decided_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+
+    ApproveRequest:
+      type: object
+      required: [approved]
+      properties:
+        approved:
+          type: boolean
+          description: Must be true on this endpoint (kept for symmetry with reject).
+
+    RejectRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 1000
+          example: Do not send this message
+
+    ApprovalDecisionData:
+      type: object
+      required: [approval_id, status, decided_at]
+      properties:
+        approval_id:
+          type: string
+          pattern: '^appr_[a-z0-9]+$'
+        status:
+          type: string
+          enum: [APPROVED, REJECTED]
+        decided_at:
+          type: string
+          format: date-time
+        execution_id:
+          anyOf:
+            - type: string
+              pattern: '^exec_[a-z0-9]+$'
+            - type: 'null'
+          description: Set when the approved action started executing immediately.
+
+    ApprovalDecisionResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/ApprovalDecisionData'
+
+    ApprovalListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/Approval'
+
+    # ─────────── Permissions ───────────
+
+    WhatsAppPermissionSet:
+      type: object
+      required: [READ, REPLY, SEND, MEDIA]
+      properties:
+        READ:
+          type: boolean
+        REPLY:
+          type: boolean
+        SEND:
+          type: boolean
+        MEDIA:
+          type: boolean
+
+    EmailPermissionSet:
+      type: object
+      required: [READ, DRAFT, SEND, DELETE]
+      properties:
+        READ:
+          type: boolean
+        DRAFT:
+          type: boolean
+        SEND:
+          type: boolean
+        DELETE:
+          type: boolean
+
+    GitHubPermissionSet:
+      type: object
+      required: [READ, ISSUES, PULL_REQUEST, COMMIT, MERGE]
+      properties:
+        READ:
+          type: boolean
+        ISSUES:
+          type: boolean
+        PULL_REQUEST:
+          type: boolean
+        COMMIT:
+          type: boolean
+        MERGE:
+          type: boolean
+
+    PermissionsData:
+      type: object
+      required: [WHATSAPP, EMAIL, GITHUB]
+      properties:
+        WHATSAPP:
+          $ref: '#/components/schemas/WhatsAppPermissionSet'
+        EMAIL:
+          $ref: '#/components/schemas/EmailPermissionSet'
+        GITHUB:
+          $ref: '#/components/schemas/GitHubPermissionSet'
+
+    PermissionsResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/PermissionsData'
+
+    PermissionResource:
+      type: string
+      enum: [WHATSAPP, EMAIL, GITHUB, MEMORY, PROJECT, TASK, AGENT, NOTIFICATION, APPROVAL, AUDIT]
+
+    PermissionCheckRequest:
+      type: object
+      required: [resource, action]
+      properties:
+        resource:
+          $ref: '#/components/schemas/PermissionResource'
+        action:
+          type: string
+          description: "Action name — e.g. READ, REPLY, SEND, MEDIA, DRAFT, DELETE, ISSUES, PULL_REQUEST, COMMIT, MERGE, WRITE, UPDATE, EXECUTE."
+          example: SEND
+        target:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: Optional target id for fine-grained checks.
+
+    PermissionCheckData:
+      type: object
+      required: [allowed]
+      properties:
+        allowed:
+          type: boolean
+        reason:
+          anyOf:
+            - type: string
+            - type: 'null'
+          description: Why it is not allowed (e.g. "Human approval required").
+        requires_approval:
+          type: boolean
+          description: True when the action can proceed after a human approval is granted.
+
+    PermissionCheckResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/PermissionCheckData'
+
+    # ─────────── Notifications ───────────
+
+    NotificationSeverity:
+      type: string
+      enum: [LOW, MEDIUM, HIGH, CRITICAL]
+
+    NotificationChannel:
+      type: string
+      enum: [PUSH, WHATSAPP, EMAIL, DASHBOARD, DAILY_BRIEF]
+
+    CreateNotificationRequest:
+      type: object
+      required: [severity, title, message]
+      properties:
+        severity:
+          $ref: '#/components/schemas/NotificationSeverity'
+        channel:
+          type: string
+          enum: [PUSH, WHATSAPP, EMAIL, DASHBOARD]
+          description: "Preferred channel. Omit to let severity-based routing decide: CRITICAL→PUSH+WHATSAPP, HIGH→PUSH, MEDIUM→DAILY_BRIEF, LOW→DASHBOARD."
+        title:
+          type: string
+          maxLength: 200
+          example: Production Down
+        message:
+          type: string
+          maxLength: 4000
+          example: SANAA production endpoint is unavailable
+        project_id:
+          anyOf:
+            - type: string
+              pattern: '^prj_[a-z0-9]+$'
+            - type: 'null'
+        data:
+          type: object
+          additionalProperties: true
+
+    CreateNotificationData:
+      type: object
+      required: [notification_id, routed_channels, status]
+      properties:
+        notification_id:
+          type: string
+          pattern: '^notf_[a-z0-9]+$'
+        routed_channels:
+          type: array
+          items:
+            $ref: '#/components/schemas/NotificationChannel'
+        status:
+          type: string
+          enum: [QUEUED, SENT, FAILED, DISMISSED]
+
+    NotificationResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/CreateNotificationData'
+
+    # ─────────── Audit ───────────
+
+    AuditActorType:
+      type: string
+      enum: [user, agent, system]
+
+    AuditResult:
+      type: string
+      enum: [SUCCESS, FAILURE, DENIED, TIMEOUT]
+
+    AuditRecord:
+      type: object
+      required: [id, timestamp, actor_type, actor, action, result]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Sequential audit sequence (append-only).
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-09-11T20:15:00Z"
+        actor_type:
+          $ref: '#/components/schemas/AuditActorType'
+        actor:
+          type: string
+          description: Actor id or principal name.
+          example: agent
+        action:
+          type: string
+          description: e.g. PROJECT_MONITOR, EMAIL_SEND, TASK_COMPLETE, APPROVAL_GRANT.
+        target_type:
+          anyOf:
+            - type: string
+            - type: 'null'
+        target_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+        project_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+        result:
+          $ref: '#/components/schemas/AuditResult'
+        execution_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+        command_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+        request_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+        details:
+          type: object
+          additionalProperties: true
+
+    AuditListResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/AuditRecord'
+
+    # ─────────── Incidents ───────────
+
+    IncidentSeverity:
+      type: string
+      enum: [LOW, MEDIUM, HIGH, CRITICAL]
+
+    CreateIncidentRequest:
+      type: object
+      required: [severity, system, issue, impact]
+      properties:
+        severity:
+          $ref: '#/components/schemas/IncidentSeverity'
+        system:
+          type: string
+          minLength: 1
+          example: SANAA
+        issue:
+          type: string
+          minLength: 1
+          example: Database unavailable
+        impact:
+          type: string
+          minLength: 1
+          example: Production unavailable
+        source:
+          type: string
+          enum: [agent, user, monitoring, integration]
+          default: agent
+
+    CreateIncidentData:
+      type: object
+      required: [incident_id, status, severity, system, created_at]
+      properties:
+        incident_id:
+          type: string
+          pattern: '^inc_[a-z0-9]+$'
+          example: inc_001
+        status:
+          type: string
+          enum: [OPEN]
+        severity:
+          $ref: '#/components/schemas/IncidentSeverity'
+        system:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    IncidentResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/CreateIncidentData'
+
+    # ─────────── System ───────────
+
+    ServiceHealth:
+      type: string
+      enum: [healthy, degraded, down]
+
+    HealthData:
+      type: object
+      required: [status, services]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, down]
+        services:
+          type: object
+          required: [database, redis, agent, scheduler, notifications]
+          properties:
+            database:
+              $ref: '#/components/schemas/ServiceHealth'
+            redis:
+              $ref: '#/components/schemas/ServiceHealth'
+            agent:
+              $ref: '#/components/schemas/ServiceHealth'
+            scheduler:
+              $ref: '#/components/schemas/ServiceHealth'
+            notifications:
+              $ref: '#/components/schemas/ServiceHealth'
+
+    HealthResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/HealthData'
+
+    SystemStatusData:
+      type: object
+      required: [system, agent, automation, security, integrations]
+      properties:
+        system:
+          type: string
+          enum: [OPERATIONAL, DEGRADED, MAINTENANCE, DOWN]
+        agent:
+          type: string
+          enum: [READY, BUSY, DEGRADED, UNAVAILABLE]
+        automation:
+          type: string
+          enum: [ACTIVE, PAUSED, DISABLED]
+        security:
+          type: string
+          enum: [PROTECTED, DEGRADED]
+        integrations:
+          type: object
+          required: [whatsapp, email, github]
+          properties:
+            whatsapp:
+              type: string
+              enum: [CONNECTED, DISCONNECTED, DEGRADED]
+            email:
+              type: string
+              enum: [CONNECTED, DISCONNECTED, DEGRADED]
+            github:
+              type: string
+              enum: [CONNECTED, DISCONNECTED, DEGRADED]
+
+    SystemStatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/SystemStatusData'
+
+    # ─────────── Daily brief ───────────
+
+    BriefItem:
+      type: object
+      required: [id, title]
+      properties:
+        id:
+          type: string
+          description: Resource id (task, message, project, ...).
+        title:
+          type: string
+        summary:
+          anyOf:
+            - type: string
+            - type: 'null'
+        project_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+        priority:
+          anyOf:
+            - type: string
+            - type: 'null'
+        due_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+
+    DailyBriefData:
+      type: object
+      required: [date, critical, high, tasks, emails, whatsapp, projects, deadlines, actions_taken, next_actions]
+      properties:
+        date:
+          type: string
+          format: date
+          example: "2026-09-11"
+        critical:
+          type: array
+          items:
+            $ref: '#/components/schemas/BriefItem'
+        high:
+          type: array
+          items:
+            $ref: '#/components/schemas/BriefItem'
+        tasks:
+          type: array
+          description: Open/overdue/due-today tasks.
+          items:
+            $ref: '#/components/schemas/BriefItem'
+        emails:
+          type: array
+          description: Emails requiring action.
+          items:
+            $ref: '#/components/schemas/BriefItem'
+        whatsapp:
+          type: array
+          description: WhatsApp messages requiring a reply.
+          items:
+            $ref: '#/components/schemas/BriefItem'
+        projects:
+          type: array
+          description: Project changes and health changes.
+          items:
+            $ref: '#/components/schemas/BriefItem'
+        deadlines:
+          type: array
+          items:
+            $ref: '#/components/schemas/BriefItem'
+        actions_taken:
+          type: array
+          description: What the agent did yesterday (audit-derived).
+          items:
+            type: string
+        next_actions:
+          type: array
+          description: What the agent recommends/has queued for today.
+          items:
+            type: string
+
+    DailyBriefResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: '#/components/schemas/DailyBriefData'
+
+    # ─────────── Events (internal bus — reference schema) ───────────
+
+    EventEnvelope:
+      description: |
+        Internal event-bus envelope. NOT exposed over HTTP in v1 (the bus is
+        internal infrastructure); documented so producers and consumers agree
+        on the exact shape.
+      type: object
+      required: [event_id, event, source, timestamp]
+      properties:
+        event_id:
+          type: string
+          pattern: '^evt_[a-z0-9]+$'
+          example: evt_001
+        event:
+          type: string
+          enum:
+            - message.received
+            - email.received
+            - task.created
+            - task.completed
+            - project.updated
+            - deployment.failed
+            - security.alert
+            - approval.required
+            - approval.granted
+            - approval.rejected
+            - automation.triggered
+            - incident.created
+        source:
+          type: string
+          description: Origin system (whatsapp, email, github, agent, scheduler, monitoring).
+          example: github
+        project_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+        severity:
+          anyOf:
+            - type: string
+              enum: [INFO, LOW, MEDIUM, HIGH, CRITICAL]
+            - type: 'null'
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-09-11T20:20:00Z"
+        payload:
+          type: object
+          additionalProperties: true
