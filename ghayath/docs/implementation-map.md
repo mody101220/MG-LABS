@@ -1,14 +1,15 @@
 # GHAYATH FASTAPI CORE — Implementation Map
 
-Internal map produced in Phase 1 (before any file changes). Source of truth:
-`openapi.yaml` (40 operations, 128 schemas), `001_init.sql` (25 tables), contract v1.0.
+Internal map produced in Phase 1 and extended for v1.1. Source of truth:
+`openapi.yaml` (46 operations, 139 schemas), `001_init.sql` (25 tables), contract v1.1.0.
 
 ## Operation → handler mapping (exact operationIds)
 
 | Domain | operations (operationId) | service |
 |---|---|---|
 | Auth | `login` `refreshToken` `logout` | AuthService |
-| Agent | `agentCommand` `agentExecute` | AgentService (IntentEngine→Planner→ToolRouter→PermissionEngine→Executor→Verification→Audit) |
+| Agent | `agentCommand` `agentExecute` `getExecution` | AgentService + ExecutionService (IntentEngine→Planner→ToolRouter→PermissionEngine→Executor→Verification→Audit) |
+| Events | `getEventsStream` | Events router + EventRepository (authenticated PostgreSQL-backed SSE) |
 | Projects | `listProjects` `createProject` `getProject` `updateProject` | ProjectService |
 | Tasks | `createTask` `listTasks` `updateTask` `completeTask` | TaskService + VerificationEngine |
 | Memory | `createMemory` `listMemory` `deleteMemory` | MemoryService |
@@ -17,12 +18,12 @@ Internal map produced in Phase 1 (before any file changes). Source of truth:
 | Email | `listEmailMessages` `getEmailMessage` `createEmailDraft` `sendEmail` | EmailService (adapter) |
 | GitHub | `listGitHubRepositories` `getRepoStatus` `createGitHubIssue` | GitHubService (adapter) |
 | Monitoring | `monitoringCheck` | MonitoringService (adapters) |
-| Automations | `createAutomation` `updateAutomation` | AutomationService + Scheduler |
+| Automations | `createAutomation` `updateAutomation` `listAutomations` `deleteAutomation` | AutomationService + Scheduler |
 | Approvals | `listApprovals` `approveApproval` `rejectApproval` | ApprovalService |
 | Permissions | `getPermissions` `checkPermission` | PermissionEngine |
-| Notifications | `createNotification` | NotificationService (severity routing) |
+| Notifications | `createNotification` `getNotifications` | NotificationService (severity routing + persisted archive) |
 | Audit | `listAudit` | AuditService (INSERT-only) |
-| Incidents | `createIncident` | IncidentService |
+| Incidents | `createIncident` `patchIncident` | IncidentService (DDL transition matrix + audit) |
 | System | `health` `systemStatus` | SystemService (real dependency probes) |
 | Brief | `getDailyBrief` | BriefService (DB-derived) |
 

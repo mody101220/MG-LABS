@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 from app.core.errors import conflict
 
@@ -25,13 +25,15 @@ class IdempotencyService:
         canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(canonical.encode()).hexdigest()
 
-    async def check(self, scope: str, key: str, body: dict) -> JSONResponse | None:
+    async def check(self, scope: str, key: str, body: dict) -> JSONResponse | Response | None:
         row = await self._db.idempotency.lookup(scope, key)
         if row is None:
             return None
         if row["request_hash"] != self._hash(body):
             raise conflict("Idempotency-Key was already used with a different request body",
                            {"scope": scope, "key": key})
+        if row["response_code"] == 204:
+            return Response(status_code=204)
         return JSONResponse(row["response_body"], status_code=row["response_code"])
 
     async def record(self, scope: str, key: str, body: dict, status_code: int, response) -> None:

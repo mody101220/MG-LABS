@@ -86,7 +86,11 @@ def _response_shape(op: dict, spec: dict) -> tuple[dict, dict, dict]:
     if code is None:
         return {}, {}, {}
     resp = op["responses"][code]
-    schema = resp["content"]["application/json"]["schema"]
+    # 204 responses and non-JSON streams intentionally have no JSON envelope.
+    content = resp.get("content", {})
+    if "application/json" not in content:
+        return {}, {}, {}
+    schema = content["application/json"]["schema"]
     flat = _flatten(schema, spec)
     props = flat["properties"]
     data = {}
@@ -255,7 +259,7 @@ def test_response_schemas_compatible(spec_ops, app_routes):
         missing_req = set(top["required"]) - impl_top
         if missing_req:
             bad.append((path, f"envelope-required-missing: {sorted(missing_req)}"))
-        data_ref_name = _data_ref_name(s["response_raw"]["data_ref"])
+        data_ref_name = _data_ref_name(s["response_raw"].get("data_ref", ""))
         if data_ref_name:
             data_model = getattr(models, data_ref_name, None)
             if data_model is not None and hasattr(data_model, "model_fields"):

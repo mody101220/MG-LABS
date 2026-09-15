@@ -1,10 +1,20 @@
 """Incident service (contract §22): open incident → audit + event + CRITICAL notification."""
 from __future__ import annotations
 
+from app.core.errors import conflict, not_found
 from app.core.security import Principal
 from app.services.audit_service import AuditService
 from app.services.events import EventBus
 from app.services.ids import new_id
+
+
+_ALLOWED_TRANSITIONS: dict[str, set[str]] = {
+    "OPEN": {"INVESTIGATING", "RESOLVED"},
+    "INVESTIGATING": {"MITIGATED", "RESOLVED"},
+    "MITIGATED": {"RESOLVED", "INVESTIGATING"},
+    "RESOLVED": {"CLOSED"},
+    "CLOSED": set(),
+}
 
 
 class IncidentService:
@@ -30,3 +40,25 @@ class IncidentService:
                 # Notification failure never blocks incident creation.
                 pass
         return incident
+
+    async def transition(self, principal: Principal, incident_id: str, status: str,
+                         resolution_note: str | None = None) -> dict:
+        current = await self._db.incidents.get(incident_id)
+        if current is None:
+            raise not_found("incident")
+        old_status = current["status"]
+        if status == old_status or status not in _ALLOWED_TRANSITIONS.get(old_status, set()):
+            raise conflict(f"Transition {old_status}→{status} is not allowed", {
+                "incident_id": incident_id, "from": old_status, "to": status,
+            })
+        updated = await self._db.incidents.update_status(incident_id, status)
+        if updated is None:
+            raise not_found("incident")
+        details: dict[str, str] = {"from": old_status, "to": status}
+        if resolution_note is not None:
+            # The DDL intentionally has no note column. Keep the note only in
+            # the immutable audit record as required by the v1.1 contract.
+            details["resolution_note"] = resolution_note
+        await self._audit.log("PATCH_INCIDENT", principal, "SUCCESS", "incident", incident_id,
+                              details=details)
+        return updated

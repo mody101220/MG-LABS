@@ -78,11 +78,9 @@ def decode_access_token(token: str, secret: str) -> tuple[str, str, str | None]:
         raise invalid_token() from e
 
 
-async def get_principal(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> Principal:
-    if credentials is None or not credentials.credentials:
-        raise invalid_token("Missing bearer token")
+async def _principal_from_token(request: Request, token: str) -> Principal:
     settings = request.app.state.settings
-    user_id, role, jti = decode_access_token(credentials.credentials, settings.auth_jwt_secret)
+    user_id, role, jti = decode_access_token(token, settings.auth_jwt_secret)
     if role not in ("OWNER", "AGENT", "VIEWER"):
         raise invalid_token("Unknown role in token")
     # Load the user to enforce account state (active) and keep the role authoritative from the DB.
@@ -102,6 +100,31 @@ async def get_principal(request: Request, credentials: HTTPAuthorizationCredenti
     return principal
 
 
+async def get_principal(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> Principal:
+    if credentials is None or not credentials.credentials:
+        raise invalid_token("Missing bearer token")
+    return await _principal_from_token(request, credentials.credentials)
+
+
+async def get_stream_principal(request: Request) -> Principal:
+    """SSE auth: bearer header is preferred; query token is only for EventSource."""
+    authorization = request.headers.get("Authorization")
+    token: str | None = None
+    if authorization:
+        scheme, _, value = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not value:
+            raise invalid_token("Missing bearer token")
+        token = value
+    else:
+        token = request.query_params.get("access_token")
+    if not token:
+        raise invalid_token("Missing bearer token")
+    principal = await _principal_from_token(request, token)
+    if not principal.is_owner and not principal.is_viewer:
+        raise forbidden(required="OWNER or VIEWER role")
+    return principal
+
+
 def require_mutating(principal: Principal = Depends(get_principal)) -> Principal:
     """RBAC guard for every mutating operation (VIEWER is read-only)."""
     if not principal.is_mutating_role:
@@ -112,6 +135,12 @@ def require_mutating(principal: Principal = Depends(get_principal)) -> Principal
 def require_owner(principal: Principal = Depends(get_principal)) -> Principal:
     if not principal.is_owner:
         raise forbidden(required="OWNER role")
+    return principal
+
+
+def require_owner_or_viewer(principal: Principal = Depends(get_principal)) -> Principal:
+    if not principal.is_owner and not principal.is_viewer:
+        raise forbidden(required="OWNER or VIEWER role")
     return principal
 
 

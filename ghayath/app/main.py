@@ -35,6 +35,7 @@ from app.services.auth_service import AuthService
 from app.services.brief_service import BriefService
 from app.services.email_service import EmailService
 from app.services.events import EventBus
+from app.services.execution_service import ExecutionService
 from app.services.github_service import GitHubService
 from app.services.idempotency import IdempotencyService
 from app.services.incident_service import IncidentService
@@ -111,6 +112,7 @@ def create_app(settings: Settings | None = None, llm=None) -> FastAPI:
         services = {
             "auth": AuthService(db, settings, audit),
             "agent": agent,
+            "executions": ExecutionService(db),
             "projects": ProjectService(db, audit, events),
             "tasks": tasks,
             "memory": memory,

@@ -1,16 +1,16 @@
 # ============================================================================
-# GHIYATH — OpenAPI v1.1 PROPOSAL FRAGMENT  (NOT A VALID STANDALONE SPEC)
+# GHIYATH — OpenAPI v1.1 ADOPTION FRAGMENT  (NOT A VALID STANDALONE SPEC)
 # ----------------------------------------------------------------------------
-# مقترح إضافي (additive) للدمج في openapi/openapi.yaml عند اعتماد
-# docs/api-contract-v1.1-proposal.md — version 1.0.x → 1.1.0.
+# سجل delta الإضافي الذي دُمج في openapi/openapi.yaml عند اعتماد
+# docs/api-contract-v1.1-proposal.md — official version 1.1.0.
 # كل $ref أدناه يشير إلى مكوّن موجود أصلاً في v1 (Envelope/ErrorResponse/
 # IdempotencyKeyHeader) ما لم يُعرَّف في قسم components هنا.
 # لا يُشغَّل هذا الملف وحده ولا يولَّد منه نماذج ولا يدخل CI.
 # ============================================================================
 openapi: 3.1.0
 info:
-  title: "GHIYATH API — v1.1 proposal delta (PROPOSAL — not adopted)"
-  version: "1.1.0-proposal"
+  title: "GHIYATH API — v1.1 adoption delta (historical fragment)"
+  version: "1.1.0"
 
 paths:
   /agent/executions/{execution_id}:

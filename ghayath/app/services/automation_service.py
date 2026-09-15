@@ -54,6 +54,21 @@ class AutomationService:
                               details={"trigger": trigger.get("type"), "action": action.get("type")})
         return automation
 
+    async def list(self, enabled: bool | None = None) -> list[dict]:
+        """Return only automation rows persisted in PostgreSQL; no execution is triggered."""
+        return await self._db.automations.list(enabled)
+
+    async def get(self, automation_id: str) -> dict | None:
+        return await self._db.automations.get(automation_id)
+
+    async def delete(self, principal: Principal, automation_id: str) -> dict:
+        current = await self._db.automations.delete(automation_id)
+        if not current:
+            raise not_found("automation")
+        await self._audit.log("DELETE_AUTOMATION", principal, "SUCCESS", "automation", automation_id,
+                              details={"name": current["name"]})
+        return current
+
     async def update(self, principal: Principal, automation_id: str, name: str | None, description: str | None,
                      trigger: dict | None, action: dict | None, enabled: bool | None) -> dict:
         current = await self._db.automations.get(automation_id)

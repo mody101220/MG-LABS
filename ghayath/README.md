@@ -8,12 +8,12 @@ FastAPI/Node.js **بدون إعادة تفسير التصميم**.
 
 | الملف | الوصف |
 |---|---|
-| [`docs/api-contract-specification-v1.0.md`](docs/api-contract-specification-v1.0.md) | العقد الكامل بالعربية (40 Endpoint + قواعد عامة) |
+| [`docs/api-contract-specification-v1.0.md`](docs/api-contract-specification-v1.0.md) | العقد الكامل بالعربية (OpenAPI v1.1.0، 46 Endpoint + قواعد عامة) |
 | [`openapi/openapi.yaml`](openapi/openapi.yaml) | **OpenAPI 3.1** — كل الـEndpoints، الـSchemas، الأخطاء، Idempotency، Rate Limits |
 | [`docs/database-schema.md`](docs/database-schema.md) | توثيق مخطط PostgreSQL (25 جدولاً + الثوابت المعمارية) |
 | [`sql/001_init.sql`](sql/001_init.sql) | DDL كامل منفَّذ (PostgreSQL 14+) مع triggers والأدوار |
-| [`app/`](app/) | **التنفيذ الفعلي FastAPI** — 34 عملية من العقد (6 مؤجَّلة لـv1.1)، services + repos + agent pipeline |
-| [`tests/`](tests/) | **125 اختباراً منفَّذاً** — contract drift، RBAC، approvals، idempotency، rate limiting، webhook HMAC، immutability، health |
+| [`app/`](app/) | **التنفيذ الفعلي FastAPI** — 46 عملية من عقد OpenAPI v1.1.0، services + repos + agent pipeline |
+| [`tests/`](tests/) | **132 اختباراً منفَّذاً** — contract drift، v1.1 RBAC/SSE/transitions، approvals، idempotency، rate limiting، webhook HMAC، immutability، health |
 | [`docs/build-report.md`](docs/build-report.md) | **تقرير التحقق النهائي (P20)** — حالة كل بند بالـPASS/FAIL الفعلي + سجل العيوب المكتشفة والمُصلَّحة |
 | [`Dockerfile`](Dockerfile) · [`docker-compose.yml`](docker-compose.yml) · [`.env.example`](.env.example) | تجميع وتشغيل (PostgreSQL + Redis + FastAPI) — بلا أسرار في الكود، secrets من البيئة فقط |
 
@@ -21,19 +21,19 @@ FastAPI/Node.js **بدون إعادة تفسير التصميم**.
 
 | الفحص | الأداة | النتيجة |
 |---|---|---|
-| صياغة OpenAPI 3.1 + كل الـ$refs | `openapi-spec-validator` | ✅ صالح — 40 عملية، 128 schema |
+| صياغة OpenAPI 3.1 + كل الـ$refs | `openapi-spec-validator` | ✅ صالح — 46 عملية، 139 schema |
 | صياغة SQL (قواعد PostgreSQL الفعلية) | `pglast` (libpg_query) | ✅ 81 عبارة |
 | FKs / indexes / triggers دلالياً | فحص AST | ✅ 18 FK، 39 index، 12 trigger |
 | **تنفيذ DDL على Postgres فعلي** | PGlite (Postgres/WASM) | ✅ 25 جدولاً + اختبارات: immutability الـaudit، CHECK enums، upsert الـmemory، dedupe الوارد، `updated_at` |
 
-## حالة التنفيذ الفعلي (FastAPI — 2026-09-15)
+## حالة التنفيذ الفعلي (FastAPI — 2026-09-16)
 
 | البند | النتيجة |
 |---|---|
-| عمليات العقد المنفَّذة | 34/40 (الـ6 مؤجَّلة حسب العقد: getExecution, getEventsStream, listAutomations, deleteAutomation, patchIncident, getNotifications) |
+| عمليات العقد المنفَّذة | **46/46** من OpenAPI v1.1.0 (40 عملية v1 محفوظة + العمليات الست المعتمدة) |
 | نماذج Pydantic | مولَّدة آلياً من `openapi.yaml` (`app/generated/models.py`) — لا تعريف يدوي لما يمكن توليده |
 | **الوكيل (الـAgent Brain)** | **LLM-driven** عبر عميل OpenAI-compatible حقيقي (`app/integrations/llm.py`) — التخطيط/التلخيص بالنموذج، والتحقق من الخطة عبر Tool Registry + Permission Engine. **بلا مفتاح LLM = `INTEGRATION_OFFLINE` بصدق** (لا fallback خفي). 17 أداة (READ/CREATE/SEND/MEMORY/AUTOMATION) |
-| الاختبارات | **125/125 ناجحة** على PostgreSQL 16.2 حقيقي (`pytest tests/`) — من ضمنها 14 اختباراً مخصصاً لطبقة الوكيل/النموذج — تفاصيل كاملة في [`docs/build-report.md`](docs/build-report.md) |
+| الاختبارات | **132/132 ناجحة** على PostgreSQL 16.2 حقيقي (`python -m pytest tests/`) — تشمل اختبارات v1.1 للـRBAC/SSE/transition/idempotency/archive |
 | Docker | Dockerfile + compose مكتوبان ومراجَآن؛ **البناء غير مُتحقق منه** (لا يوجد Docker daemon في بيئة التطوير) |
 
 ```bash
@@ -64,22 +64,21 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 9. **الأحداث**: Bus داخلي + سجل `events` — **لا endpoint HTTP** في v1 (قيد ملاحظ أدناه).
 10. **`GET /health` عام** (بدون auth) و`/auth/login` غير محمي؛ كل ما عداه Bearer.
 
-## مرشحات v1.1 (مقصود إقصاؤها من v1 — أضيفت هنا بوضوح)
+## v1.1.0 — العمليات الست المضافة
 
-| المرشح | السبب |
-|---|---|
-| `GET /agent/executions/{execution_id}` | متابعة حالة التنفيذ مباشرة (حالياً عبر events/notifications/audit) |
-| `GET /events/stream` (SSE) | Realtime للـDashboard |
-| `GET /automations` + `DELETE /automations/{id}` | إدارة الأتمتة القائمة |
-| `PATCH /incidents/{id}` (حالة الحادث) | إغلاق/تتبع الحوادث |
-| `GET /notifications` | أرشيف الإشعارات |
+تم اعتماد المقترح وإدماجه في العقد الرسمي `openapi/openapi.yaml`، مع الحفاظ على
+عمليات v1 الأربعين دون breaking changes. الإصدار الرسمي يضم 46 عملية:
 
-كل مرشح أعلاه يضاف بـRevision للعقد (رقم version) — لا يُضاف ضمناً.
+- `GET /agent/executions/{execution_id}` — حالة التنفيذ من PostgreSQL مع تقييد نتيجة VIEWER.
+- `GET /events/stream` — SSE حقيقي من جدول `events` مع cursor وheartbeat وRBAC.
+- `GET /automations` — السجلات الموجودة فعلياً مع فلتر `enabled`.
+- `DELETE /automations/{id}` — OWNER فقط، hard delete، idempotency وتدقيق immutable.
+- `PATCH /incidents/{id}` — مصفوفة انتقالات DDL مع idempotency وتدقيق الملاحظة.
+- `GET /notifications` — أرشيف PostgreSQL مع الفلاتر و`limit` الموثق.
 
-**مقترح v1.1 جاهز للمراجعة:** [`docs/api-contract-v1.1-proposal.md`](docs/api-contract-v1.1-proposal.md)
-(schemas + status codes + صلاحيات + قواعد idempotency/audit) +
-القطعة القابلة للدمج آلياً [`openapi/v1.1-proposal-fragment.yaml`](openapi/v1.1-proposal-fragment.yaml).
-**غير مُعتمد** — عقد v1 الحالي لم يُمَس.
+سجل الاعتماد التفصيلي: [`docs/api-contract-v1.1-proposal.md`](docs/api-contract-v1.1-proposal.md)
+والقطعة الأصلية القابلة للدمج: [`openapi/v1.1-proposal-fragment.yaml`](openapi/v1.1-proposal-fragment.yaml).
+العقد الملزم الآن هو OpenAPI الرسمي فقط.
 
 ## توليد النماذج (مُعيَّر — لا تعديل يدوي)
 

@@ -1,9 +1,10 @@
-# GHIYATH — API Contract v1.1 — مقترح Revision (PROPOSAL — غير مُعتمد)
+# GHIYATH — API Contract v1.1 — Adoption Record
 
-**حالة:** مقترح للقرار. عقد v1 (`openapi/openapi.yaml`) **لم يُعدَّل ولا يُعدَّل** حتى
-اعتماد هذا المقترح. هذا الملف يقدّم التعريف الكامل للعمليات الست المؤجَّلة في
-`README.md` (قسم "مرشحات v1.1") بصيغة قابلة للتنفيذ المباشرة: schemas + status codes +
-صلاحيات + قواعد approval/idempotency/audit.
+**حالة:** تم اعتماد هذا المقترح ودمج delta في العقد الرسمي
+`openapi/openapi.yaml` كإصدار `1.1.0`. يُحفظ هذا الملف كسجل قرار قابل للتدقيق؛
+العقد الرسمي الوحيد هو OpenAPI، وقد نُفّذت العمليات الست واختُبرت على PostgreSQL
+حقيقي دون تغيير عقد v1 السابق. هذا الملف يقدّم التعريف الكامل للعمليات الست:
+schemas + status codes + صلاحيات + قواعد approval/idempotency/audit.
 
 **نوع التغيير:** إضافي بالكامل (additive / non-breaking) — لا تغيّر في أي operationId
 أو path أو schema موجود في v1. `info.version`: `1.0.x → 1.1.0`.
@@ -272,7 +273,7 @@ operationId: getNotifications
    UPDATE/DELETE عليها مرفوضة بالـtrigger (كما في v1).
 8. idempotency mismatch: نفس الـkey بجسم مختلف → 409 (نفس سلوك v1).
 
-**خطوة القرار:** اعتماد هذا الملف (تعديل/تعليق على أي بند) → أُنزله إلى
-`openapi/openapi.yaml` كـ `1.1.0` (مع تحديث `docs/api-contract-specification-v1.0.md`
-إلى مرجع v1.1) + `app/generated/models.py` بالمولّد المثبت + التنفيذ + البطارية
-الكاملة + CI. دون الاعتماد، عقد v1 يبقى كما هو 100%.
+**قرار الاعتماد والتنفيذ:** تم اعتماد هذا الملف، وأصبح `openapi/openapi.yaml`
+هو العقد الرسمي `1.1.0`. تم تحديث مرجع العقد، توليد النماذج بالمولّد المثبت،
+تنفيذ العمليات الست، وتشغيل البطارية الكاملة وCI. عقد v1 السابق بقي additive
+دون breaking changes.

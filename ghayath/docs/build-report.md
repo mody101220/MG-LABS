@@ -1,29 +1,23 @@
 # GHAYATH FastAPI Core — Build Verification Report (Phase 20)
 
-Date: 2026-09-15 · Branch: `arena/01a0a2cf-mg-labs` · Test DB: real PostgreSQL 16.2 (embedded `pgserver`) · Static: mypy 2.3.1 + pyflakes
+Date: 2026-09-16 · Branch: `arena/01a0a2cf-mg-labs` · Test DB: real PostgreSQL 16.2 (embedded `pgserver`) · Static: mypy 2.3.1 + pyflakes
 
-Final verification run: **125/125 tests passed** (`pytest tests/`, ~5 min).
+Final verification run: **132/132 tests passed** (`python -m pytest tests/`, real PostgreSQL).
 
 ```
 GHAYATH FASTAPI CORE
 
 Implementation:        PASS — every operation in the OpenAPI contract is implemented:
-                       40/40 openapi.yaml operations have routes, operationIds and
-                       security-level registry entries (drift-verified). The 6 v1.1
-                       candidates of the spec doc (getExecution, getEventsStream,
-                       listAutomations, deleteAutomation, patchIncident,
-                       getNotifications) are deliberately absent from openapi.yaml and
-                       were not built (no contract change). 63 app modules, all compile
-                       clean; app boots against real PostgreSQL 16.2.
-                       v1.1 PROPOSAL (pending user decision, NOT adopted): full
-                       revision drafted — docs/api-contract-v1.1-proposal.md +
-                       openapi/v1.1-proposal-fragment.yaml (additive delta: 6 ops,
-                       11 schemas, 0 new error codes, 0 DDL, 0 new rate tiers,
-                       approval list unchanged; verified: fragment YAML parses and
-                       every $ref resolves against the untouched v1 spec).
+                       46/46 openapi.yaml operations have routes, operationIds and
+                       security-level registry entries (drift-verified). OpenAPI v1.1.0
+                       is additive: the six adopted operations (execution lookup, SSE,
+                       automation list/delete, incident patch, notification archive)
+                       are implemented from real PostgreSQL state. 0 DDL changes.
+                       The proposal and machine-readable fragment remain as the
+                       adoption record; the official source is now openapi.yaml.
 
 OpenAPI:               PASS — openapi.yaml validates (openapi-spec-validator, 3.1); all
-                       $refs resolve; 40 unique operationIds; fixed 15-error-code set;
+                       $refs resolve; 46 unique operationIds; fixed 15-error-code set;
                        request/response schemas of every implemented operation verified
                        field-compatible against the generated models (drift test);
                        security level per operation verified (PUBLIC/AUTH/WEBHOOK);
@@ -121,7 +115,7 @@ Contract Tests:        PASS — automated drift test (FastAPI routes ↔ openapi
                        operationId, incompatible request/response schema, missing security,
                        wrong documented status — all checked, all green.
 
-Integration Tests:     PASS — 125/125 executed and passing (pytest, real PostgreSQL 16.2,
+Integration Tests:     PASS — 132/132 executed and passing (pytest, real PostgreSQL 16.2,
                        providers + LLM mocked only at the httpx transport boundary): full
                        API contract incl. list filters + pagination, approval flows,
                        LLM-driven agent pipeline (COMPLETED with independent verification;

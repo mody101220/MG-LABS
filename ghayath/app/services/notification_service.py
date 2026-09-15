@@ -26,6 +26,11 @@ class NotificationService:
         self._wa = whatsapp_adapter
         self._audit = audit
 
+    async def list(self, severity: str | None, status: str | None, project_id: str | None,
+                   since, limit: int) -> list[dict]:
+        """Read the notification archive; never creates or claims delivery."""
+        return await self._db.notifications.list(severity, status, project_id, since, limit)
+
     async def create(self, principal: Principal | None, severity: str, channel: str | None,
                      title: str, message: str, project_id: str | None, data: dict | None) -> dict:
         channels = [channel] if channel else list(ROUTING[severity])

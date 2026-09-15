@@ -2,9 +2,9 @@ openapi: 3.1.0
 
 info:
   title: "GHAYATH PERSONAL AI - Core API"
-  version: "1.0.0"
+  version: "1.1.0"
   description: |
-    REST/JSON API contract for **GHAYATH PERSONAL AI** (v1.0) — a Modular Agentic
+    REST/JSON API contract for **GHAYATH PERSONAL AI** (v1.1) — a Modular Agentic
     Architecture where an autonomous agent monitors and operates the owner's projects,
     inboxes, and communications under strict permission + approval control.
 
@@ -1359,9 +1359,164 @@ paths:
         '504':
           $ref: '#/components/responses/Timeout'
 
+  /agent/executions/{execution_id}:
+    get:
+      tags:
+      - Agent
+      operationId: getExecution
+      summary: Get agent execution status and steps
+      description: 'Direct execution tracking. `result` is returned in full to OWNER/AGENT
+
+        only; VIEWER receives `result: null` plus per-step `output_summary`
+
+        (truncated to 500 chars).
+
+        '
+      parameters:
+      - name: execution_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Execution snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeAgentExecution'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /events/stream:
+    get:
+      tags:
+      - Events
+      operationId: getEventsStream
+      summary: Server-Sent Events stream (realtime dashboard feed)
+      description: "SSE from the `events` table. Cursor = last event ULID (`since`).\n\
+        Heartbeat comment every 15s. Reconnect with `since=<last id>` → no loss,\nno duplicates.\n\
+        AUTH (documented exception — the only path allowing a query token):\n  - `Authorization:\
+        \ Bearer <token>` (preferred), or\n  - `?access_token=<token>` (EventSource compatibility;\
+        \ use short-lived\n    access tokens — the token is visible in the URL).\nRoles:\
+        \ OWNER, VIEWER. (AGENT excluded — least privilege.)\n"
+      parameters:
+      - name: since
+        in: query
+        required: false
+        description: Event ULID cursor; omitted = start from now
+        schema:
+          type: string
+      - name: types
+        in: query
+        required: false
+        description: Comma-separated event names (from v1 events.event enum)
+        schema:
+          type: string
+      - name: access_token
+        in: query
+        required: false
+        description: 'PROPOSAL exception: bearer token via query for EventSource'
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /incidents/{incident_id}:
+    patch:
+      tags:
+      - Incidents
+      operationId: patchIncident
+      summary: Transition incident status
+      description: "OWNER, AGENT. Allowed transitions (else 409 CONFLICT):\n  OPEN→INVESTIGATING|RESOLVED;\
+        \ INVESTIGATING→MITIGATED|RESOLVED;\n  MITIGATED→RESOLVED|INVESTIGATING; RESOLVED→CLOSED;\
+        \ CLOSED→(terminal).\nNo-op (same status) → 409. `resolved_at` auto-set on RESOLVED.\n\
+        `resolution_note` is recorded ONLY in audit_logs.details (no DDL change).\nIdempotency-Key\
+        \ REQUIRED (24h TTL, v1 semantics).\n"
+      parameters:
+      - name: incident_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IncidentStatusUpdateRequest'
+      responses:
+        '200':
+          description: Updated incident
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeIncident'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Transition not allowed per the state matrix
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                conflict:
+                  value:
+                    success: false
+                    error:
+                      code: CONFLICT
+                      message: Transition CLOSED→INVESTIGATING is not allowed
+                      details: {}
+                    request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
+                    timestamp: '2026-09-11T20:00:05Z'
+
   # ─────────────────────────── AUTOMATIONS ───────────────────────────
 
   /automations:
+    get:
+      tags:
+      - Automations
+      operationId: listAutomations
+      summary: List automations
+      description: 'Roles: OWNER, AGENT, VIEWER (read-only). No pagination (v1 list style).'
+      parameters:
+      - name: enabled
+        in: query
+        required: false
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: Automation list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeAutomationList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
       tags: [Automations]
       operationId: createAutomation
@@ -1403,6 +1558,40 @@ paths:
           $ref: '#/components/responses/RateLimited'
 
   /automations/{automation_id}:
+    delete:
+      tags:
+      - Automations
+      operationId: deleteAutomation
+      summary: Delete an automation (hard delete, audited)
+      description: 'OWNER only. Hard DELETE + immutable audit row (action DELETE_AUTOMATION).
+
+        Idempotency-Key REQUIRED (24h TTL, v1 semantics). No approval (documented
+
+        decision — not a sensitive tool operation).
+
+        '
+      parameters:
+      - name: automation_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      responses:
+        '204':
+          description: Deleted (or idempotent replay of a previous delete)
+        '400':
+          description: Missing/invalid Idempotency-Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
     patch:
       tags: [Automations]
       operationId: updateAutomation
@@ -1637,6 +1826,71 @@ paths:
   # ─────────────────────────── NOTIFICATIONS ───────────────────────────
 
   /notifications:
+    get:
+      tags:
+      - Notifications
+      operationId: getNotifications
+      summary: Notification archive
+      description: 'OWNER, VIEWER. Newest first. `limit` (default 50, max 200) is the
+
+        documented exception from the no-pagination v1 list style — the archive
+
+        grows unbounded.
+
+        '
+      parameters:
+      - name: severity
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - LOW
+          - MEDIUM
+          - HIGH
+          - CRITICAL
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - QUEUED
+          - SENT
+          - FAILED
+          - DISMISSED
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: since
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      responses:
+        '200':
+          description: Notification list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeNotificationList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
       tags: [Notifications]
       operationId: createNotification
@@ -4202,3 +4456,306 @@ components:
         payload:
           type: object
           additionalProperties: true
+
+    # ─────────── v1.1 adopted schemas ───────────
+    IncidentStatusUpdateRequest:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          enum:
+          - OPEN
+          - INVESTIGATING
+          - MITIGATED
+          - RESOLVED
+          - CLOSED
+        resolution_note:
+          type: string
+          maxLength: 2000
+          description: Recorded in audit_logs.details only (no incident column)
+    ExecutionView:
+      type: object
+      required:
+      - id
+      - command_id
+      - status
+      - created_at
+      properties:
+        id:
+          type: string
+        command_id:
+          type: string
+        approval_id:
+          type:
+          - string
+          - 'null'
+        status:
+          type: string
+          enum:
+          - PLANNED
+          - WAITING_APPROVAL
+          - RUNNING
+          - VERIFYING
+          - COMPLETED
+          - FAILED
+          - BLOCKED
+          - CANCELLED
+        started_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        finished_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        error_code:
+          type:
+          - string
+          - 'null'
+        error_message:
+          type:
+          - string
+          - 'null'
+        verification_id:
+          type:
+          - string
+          - 'null'
+        created_at:
+          type: string
+          format: date-time
+    ExecutionStepView:
+      type: object
+      required:
+      - index
+      - tool
+      - status
+      properties:
+        index:
+          type: integer
+        tool:
+          type: string
+        status:
+          type: string
+          enum:
+          - PENDING
+          - RUNNING
+          - SUCCEEDED
+          - FAILED
+          - SKIPPED
+        error:
+          type:
+          - string
+          - 'null'
+        output_summary:
+          type:
+          - string
+          - 'null'
+          description: Truncated (<=500 chars) for all roles
+    AgentExecutionData:
+      type: object
+      required:
+      - execution
+      - steps
+      - result
+      properties:
+        execution:
+          $ref: '#/components/schemas/ExecutionView'
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExecutionStepView'
+        result:
+          description: Full result JSON for OWNER/AGENT; null for VIEWER
+          oneOf:
+          - type: object
+          - type: 'null'
+    EnvelopeAgentExecution:
+      allOf:
+      - $ref: '#/components/schemas/SuccessEnvelope'
+      - type: object
+        properties:
+          data:
+            $ref: '#/components/schemas/AgentExecutionData'
+    AutomationView:
+      type: object
+      required:
+      - id
+      - name
+      - enabled
+      - created_at
+      - updated_at
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type:
+          - string
+          - 'null'
+        trigger:
+          type: object
+        action:
+          type: object
+        enabled:
+          type: boolean
+        last_run_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        last_run_status:
+          type:
+          - string
+          - 'null'
+          enum:
+          - SUCCESS
+          - FAILURE
+          - SKIPPED
+          - null
+        next_run_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    EnvelopeAutomationList:
+      allOf:
+      - $ref: '#/components/schemas/SuccessEnvelope'
+      - type: object
+        properties:
+          data:
+            type: array
+            items:
+              $ref: '#/components/schemas/AutomationView'
+    IncidentView:
+      type: object
+      required:
+      - id
+      - severity
+      - status
+      - created_at
+      properties:
+        id:
+          type: string
+        severity:
+          type: string
+          enum:
+          - LOW
+          - MEDIUM
+          - HIGH
+          - CRITICAL
+        system:
+          type: string
+        issue:
+          type: string
+        impact:
+          type:
+          - string
+          - 'null'
+        status:
+          type: string
+          enum:
+          - OPEN
+          - INVESTIGATING
+          - MITIGATED
+          - RESOLVED
+          - CLOSED
+        source:
+          type: string
+          enum:
+          - agent
+          - user
+          - monitoring
+          - integration
+        resolved_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    EnvelopeIncident:
+      allOf:
+      - $ref: '#/components/schemas/SuccessEnvelope'
+      - type: object
+        properties:
+          data:
+            $ref: '#/components/schemas/IncidentView'
+    NotificationView:
+      type: object
+      required:
+      - id
+      - severity
+      - status
+      - title
+      - message
+      - created_at
+      properties:
+        id:
+          type: string
+        severity:
+          type: string
+          enum:
+          - LOW
+          - MEDIUM
+          - HIGH
+          - CRITICAL
+        channel_requested:
+          type: string
+          enum:
+          - PUSH
+          - WHATSAPP
+          - EMAIL
+          - DASHBOARD
+        channels:
+          type: array
+          items:
+            type: string
+        title:
+          type: string
+        message:
+          type: string
+        project_id:
+          type:
+          - string
+          - 'null'
+        status:
+          type: string
+          enum:
+          - QUEUED
+          - SENT
+          - FAILED
+          - DISMISSED
+        data:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        sent_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    EnvelopeNotificationList:
+      allOf:
+      - $ref: '#/components/schemas/SuccessEnvelope'
+      - type: object
+        properties:
+          data:
+            type: array
+            items:
+              $ref: '#/components/schemas/NotificationView'

@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 
 from app.services.ids import new_id
-from typing import Any
+from typing import Any, List
 
 from psycopg.rows import dict_row
 
@@ -344,6 +344,18 @@ class ApprovalRepository(_Repo):
 # ─────────────────────────── Automations ───────────────────────────
 
 class AutomationRepository(_Repo):
+    async def list(self, enabled: bool | None = None) -> list[dict]:
+        if enabled is None:
+            return await self.fetch("SELECT * FROM automations ORDER BY created_at DESC, id DESC")
+        return await self.fetch(
+            "SELECT * FROM automations WHERE enabled = %s ORDER BY created_at DESC, id DESC", enabled)
+
+    async def get(self, id: str) -> dict | None:
+        return await self.fetchone("SELECT * FROM automations WHERE id = %s", id)
+
+    async def delete(self, id: str) -> dict | None:
+        return await self.fetchone("DELETE FROM automations WHERE id = %s RETURNING *", id)
+
     async def create(self, id: str, name: str, description: str | None, trigger: dict, action: dict,
                      enabled: bool, next_run_at: datetime | None) -> dict | None:
         return await self.fetchone(
@@ -351,9 +363,6 @@ class AutomationRepository(_Repo):
                VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
             id, name, description, J(trigger), J(action), enabled, next_run_at,
         )
-
-    async def get(self, id: str) -> dict | None:
-        return await self.fetchone("SELECT * FROM automations WHERE id = %s", id)
 
     async def update(self, id: str, name: str | None, description: str | None, trigger: dict | None,
                      action: dict | None, enabled: bool | None, next_run_at: datetime | None = None) -> dict | None:
@@ -376,7 +385,7 @@ class AutomationRepository(_Repo):
         args.append(id)
         return await self.fetchone(f"UPDATE automations SET {', '.join(sets)} WHERE id = %s RETURNING *", *args)
 
-    async def due(self, now: datetime) -> list[dict]:
+    async def due(self, now: datetime) -> List[dict]:
         return await self.fetch(
             "SELECT * FROM automations WHERE enabled = TRUE AND next_run_at IS NOT NULL AND next_run_at <= %s", now)
 
@@ -396,6 +405,26 @@ class NotificationRepository(_Repo):
                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
             id, severity, channel_requested, J(channels), title, message, project_id, status, J(data or {}),
         )
+
+    async def list(self, severity: str | None, status: str | None, project_id: str | None,
+                   since: datetime | None, limit: int) -> list[dict]:
+        where: list[str] = ["1 = 1"]
+        args: list[Any] = []
+        if severity:
+            where.append("severity = %s")
+            args.append(severity)
+        if status:
+            where.append("status = %s")
+            args.append(status)
+        if project_id:
+            where.append("project_id = %s")
+            args.append(project_id)
+        if since:
+            where.append("created_at >= %s")
+            args.append(since)
+        return await self.fetch(
+            f"SELECT * FROM notifications WHERE {' AND '.join(where)} "
+            "ORDER BY created_at DESC, id DESC LIMIT %s", *args, limit)
 
 
 # ─────────────────────────── Audit (INSERT only) ───────────────────────────
@@ -447,6 +476,18 @@ class IncidentRepository(_Repo):
         return await self.fetchone(
             "INSERT INTO incidents (id, severity, system, issue, impact, source) VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
             id, severity, system, issue, impact, source,
+        )
+
+    async def get(self, id: str) -> dict | None:
+        return await self.fetchone("SELECT * FROM incidents WHERE id = %s", id)
+
+    async def update_status(self, id: str, status: str) -> dict | None:
+        return await self.fetchone(
+            """UPDATE incidents
+               SET status = %s,
+                   resolved_at = CASE WHEN %s = 'RESOLVED' THEN COALESCE(resolved_at, now()) ELSE resolved_at END
+               WHERE id = %s RETURNING *""",
+            status, status, id,
         )
 
 
@@ -633,6 +674,15 @@ class EventRepository(_Repo):
             "INSERT INTO events (id, event, source, project_id, severity, payload) VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
             id, event, source, project_id, severity, J(payload),
         )
+
+    async def latest_id(self) -> str | None:
+        row = await self.fetchone("SELECT id FROM events ORDER BY id DESC LIMIT 1")
+        return str(row["id"]) if row else None
+
+    async def after(self, cursor: str | None, limit: int = 100) -> list[dict]:
+        if cursor is None:
+            return await self.fetch("SELECT * FROM events ORDER BY id LIMIT %s", limit)
+        return await self.fetch("SELECT * FROM events WHERE id > %s ORDER BY id LIMIT %s", cursor, limit)
 
 
 class IdempotencyRepository(_Repo):

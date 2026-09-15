@@ -43,7 +43,7 @@ def test_operation_ids_unique_and_counted():
                 assert "operationId" in op, f"{method} {path} missing operationId"
                 ids.append(op["operationId"])
     assert len(ids) == len(set(ids)), "duplicate operationIds"
-    assert len(ids) == 40, f"expected 40 operations, found {len(ids)}"
+    assert len(ids) == 46, f"expected 46 operations, found {len(ids)}"
 
 
 def test_error_codes_are_exactly_the_fixed_set():
@@ -58,14 +58,12 @@ def test_error_codes_are_exactly_the_fixed_set():
     assert codes == expected
 
 
-def test_deferred_v11_endpoints_absent():
+def test_v11_operations_are_adopted():
     spec = _spec()
     paths = set(spec["paths"])
-    assert "/agent/executions/{execution_id}" not in paths
-    assert "/events/stream" not in paths
-    assert "/automations" in paths  # create exists
-    # /automations must NOT have GET/DELETE in the spec
-    assert "get" not in spec["paths"]["/automations"]
-    assert "delete" not in spec["paths"]["/automations/{automation_id}"]
-    assert "patch" not in spec["paths"].get("/incidents/{incident_id}", {})
-    assert "/notifications" in spec["paths"] and "get" not in spec["paths"]["/notifications"]
+    assert "/agent/executions/{execution_id}" in paths
+    assert "/events/stream" in paths
+    assert "get" in spec["paths"]["/automations"]
+    assert "delete" in spec["paths"]["/automations/{automation_id}"]
+    assert "patch" in spec["paths"]["/incidents/{incident_id}"]
+    assert "get" in spec["paths"]["/notifications"]

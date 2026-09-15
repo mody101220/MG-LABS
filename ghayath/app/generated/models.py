@@ -1615,3 +1615,166 @@ class EventEnvelope(BaseModel):
     severity: Severity | None = None
     timestamp: Annotated[AwareDatetime, Field(examples=['2026-09-11T20:20:00Z'])]
     payload: dict[str, Any] | None = None
+
+
+class Status14(Enum):
+    OPEN = 'OPEN'
+    INVESTIGATING = 'INVESTIGATING'
+    MITIGATED = 'MITIGATED'
+    RESOLVED = 'RESOLVED'
+    CLOSED = 'CLOSED'
+
+
+class IncidentStatusUpdateRequest(BaseModel):
+    status: Status14
+    resolution_note: Annotated[
+        str | None,
+        Field(
+            description='Recorded in audit_logs.details only (no incident column)',
+            max_length=2000,
+        ),
+    ] = None
+
+
+class Status15(Enum):
+    PLANNED = 'PLANNED'
+    WAITING_APPROVAL = 'WAITING_APPROVAL'
+    RUNNING = 'RUNNING'
+    VERIFYING = 'VERIFYING'
+    COMPLETED = 'COMPLETED'
+    FAILED = 'FAILED'
+    BLOCKED = 'BLOCKED'
+    CANCELLED = 'CANCELLED'
+
+
+class ExecutionView(BaseModel):
+    id: str
+    command_id: str
+    approval_id: str | None = None
+    status: Status15
+    started_at: AwareDatetime | None = None
+    finished_at: AwareDatetime | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    verification_id: str | None = None
+    created_at: AwareDatetime
+
+
+class Status16(Enum):
+    PENDING = 'PENDING'
+    RUNNING = 'RUNNING'
+    SUCCEEDED = 'SUCCEEDED'
+    FAILED = 'FAILED'
+    SKIPPED = 'SKIPPED'
+
+
+class ExecutionStepView(BaseModel):
+    index: int
+    tool: str
+    status: Status16
+    error: str | None = None
+    output_summary: Annotated[
+        str | None, Field(description='Truncated (<=500 chars) for all roles')
+    ] = None
+
+
+class AgentExecutionData(BaseModel):
+    execution: ExecutionView
+    steps: list[ExecutionStepView]
+    result: Annotated[
+        dict[str, Any] | None,
+        Field(description='Full result JSON for OWNER/AGENT; null for VIEWER'),
+    ] = None
+
+
+class EnvelopeAgentExecution(SuccessEnvelope):
+    data: AgentExecutionData | None = None
+
+
+class LastRunStatus1(Enum):
+    SUCCESS = 'SUCCESS'
+    FAILURE = 'FAILURE'
+    SKIPPED = 'SKIPPED'
+    NoneType_None = None
+
+
+class AutomationView(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    trigger: dict[str, Any] | None = None
+    action: dict[str, Any] | None = None
+    enabled: bool
+    last_run_at: AwareDatetime | None = None
+    last_run_status: LastRunStatus1 | None = None
+    next_run_at: AwareDatetime | None = None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class EnvelopeAutomationList(SuccessEnvelope):
+    data: list[AutomationView] | None = None
+
+
+class Severity1(Enum):
+    LOW = 'LOW'
+    MEDIUM = 'MEDIUM'
+    HIGH = 'HIGH'
+    CRITICAL = 'CRITICAL'
+
+
+class Status17(Enum):
+    OPEN = 'OPEN'
+    INVESTIGATING = 'INVESTIGATING'
+    MITIGATED = 'MITIGATED'
+    RESOLVED = 'RESOLVED'
+    CLOSED = 'CLOSED'
+
+
+class IncidentView(BaseModel):
+    id: str
+    severity: Severity1
+    system: str | None = None
+    issue: str | None = None
+    impact: str | None = None
+    status: Status17
+    source: Source1 | None = 'agent'  # type: ignore[assignment]  # generated: contract default is a string
+    resolved_at: AwareDatetime | None = None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime | None = None
+
+
+class EnvelopeIncident(SuccessEnvelope):
+    data: IncidentView | None = None
+
+
+class ChannelRequested(Enum):
+    PUSH = 'PUSH'
+    WHATSAPP = 'WHATSAPP'
+    EMAIL = 'EMAIL'
+    DASHBOARD = 'DASHBOARD'
+
+
+class Status18(Enum):
+    QUEUED = 'QUEUED'
+    SENT = 'SENT'
+    FAILED = 'FAILED'
+    DISMISSED = 'DISMISSED'
+
+
+class NotificationView(BaseModel):
+    id: str
+    severity: Severity1
+    channel_requested: ChannelRequested | None = None
+    channels: list[str] | None = None
+    title: str
+    message: str
+    project_id: str | None = None
+    status: Status18
+    data: dict[str, Any] | None = None
+    created_at: AwareDatetime
+    sent_at: AwareDatetime | None = None
+
+
+class EnvelopeNotificationList(SuccessEnvelope):
+    data: list[NotificationView] | None = None

@@ -1,4 +1,4 @@
-# GHAYATH PERSONAL AI — API Contract Specification v1.0
+# GHAYATH PERSONAL AI — API Contract Specification v1.1
 
 | | |
 |---|---|
@@ -8,8 +8,8 @@
 | **Authentication** | Bearer Token + RBAC |
 | **Format** | `application/json` |
 | **Time** | ISO-8601 UTC داخلياً، مع تحويل المنطقة الزمنية للعرض |
-| **Version** | 1.0 |
-| **Date** | 2026-09-15 |
+| **Version** | 1.1.0 |
+| **Date** | 2026-09-16 |
 
 > **المرافق الرسمية لهذا العقد:**
 > - [OpenAPI 3.1 Specification](../openapi/openapi.yaml) — كل الـEndpoints أدناه قابلة للتحويل مباشرة إلى FastAPI/Node.js.
@@ -885,6 +885,21 @@ Audit Log
 ```
 
 وهذا بالضبط هو الفرق بين Chatbot عنده Tools وبين Autonomous Operations Agent مضبوط هندسياً.
+
+---
+
+## 31. v1.1 additive operations
+
+OpenAPI `1.1.0` retains all 40 v1 operations and adds exactly six operations (46 total):
+
+- `GET /agent/executions/{execution_id}` — DB-backed execution projection; OWNER/AGENT receive the persisted result, VIEWER receives `result: null` and summaries capped at 500 characters.
+- `GET /events/stream` — authenticated SSE from the persisted `events` table; OWNER/VIEWER only, cursor-safe polling, type filtering, and a 15-second heartbeat. `access_token` query authentication is limited to this EventSource endpoint.
+- `GET /automations` — persisted automation rows with the optional `enabled` filter.
+- `DELETE /automations/{automation_id}` — OWNER-only hard delete, mandatory 24-hour `Idempotency-Key`, and immutable `DELETE_AUTOMATION` audit entry.
+- `PATCH /incidents/{incident_id}` — OWNER/AGENT state transition using the DDL enum and explicit transition matrix; mandatory idempotency; `resolution_note` is stored only in immutable audit details.
+- `GET /notifications` — OWNER/VIEWER archive from PostgreSQL, newest first, with documented filters and `limit` 1–200 (default 50).
+
+No DDL or migration is introduced. The fixed 15 error codes, approval-eligible operations, and v1 rate-limit tiers are unchanged. The normative machine-readable contract is [`../openapi/openapi.yaml`](../openapi/openapi.yaml); the earlier proposal is retained as the adoption record.
 
 ---
 

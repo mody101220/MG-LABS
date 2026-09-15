@@ -5,6 +5,8 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     agent,
+    events,
+    executions,
     approvals,
     audit,
     automations,
@@ -28,7 +30,7 @@ from app.api.v1 import (
 def create_v1_router() -> APIRouter:
     router = APIRouter(prefix="/api/v1")
     for module in (
-        auth, agent, projects, tasks, memory, whatsapp, webhooks, email, github,
+        auth, agent, executions, events, projects, tasks, memory, whatsapp, webhooks, email, github,
         monitoring, automations, approvals, permissions, notifications, audit,
         incidents, system, brief,
     ):
