@@ -124,10 +124,16 @@ Integration Tests:     PASS — 125/125 executed and passing (pytest, real Postg
                        webhook, scheduler SCHEDULE run path, structured logging with
                        redaction (password, JWT, webhook secret, bearer tokens absent).
 
-Docker:                FAIL (BLOCKED) — Dockerfile, docker-compose.yml (db+redis+app,
-                       env-only secrets, .env.example, no .env) are written and reviewed,
-                       but this sandbox has no docker daemon/binary, so image build and
+Docker:                FAIL (BLOCKED) — no docker/podman/buildah/nerdctl binary or
+                       socket exists in this sandbox (checked), so image build and
                        compose up could NOT be executed. Not claimed as verified.
+                       Best-possible static verification WAS executed: Dockerfile
+                       parses (15 instructions), compose YAML valid (3 services),
+                       and env-consistency cross-check (every ${VAR} in compose and
+                       every GHAYATH_* in .env.example maps to a real Settings field
+                       and vice versa) — found + fixed: undocumented
+                       GHAYATH_NOTIFICATION_WHATSAPP_RECIPIENT and missing optional
+                       LLM/plan-steps passthroughs in compose.
 
 Remaining Blockers:
   1. Docker build/run unverified (no daemon in sandbox) — run
