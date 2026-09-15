@@ -12,6 +12,10 @@ FastAPI/Node.js **بدون إعادة تفسير التصميم**.
 | [`openapi/openapi.yaml`](openapi/openapi.yaml) | **OpenAPI 3.1** — كل الـEndpoints، الـSchemas، الأخطاء، Idempotency، Rate Limits |
 | [`docs/database-schema.md`](docs/database-schema.md) | توثيق مخطط PostgreSQL (25 جدولاً + الثوابت المعمارية) |
 | [`sql/001_init.sql`](sql/001_init.sql) | DDL كامل منفَّذ (PostgreSQL 14+) مع triggers والأدوار |
+| [`app/`](app/) | **التنفيذ الفعلي FastAPI** — 34 عملية من العقد (6 مؤجَّلة لـv1.1)، services + repos + agent pipeline |
+| [`tests/`](tests/) | **111 اختباراً منفَّذاً** — contract drift، RBAC، approvals، idempotency، rate limiting، webhook HMAC، immutability، health |
+| [`docs/build-report.md`](docs/build-report.md) | **تقرير التحقق النهائي (P20)** — حالة كل بند بالـPASS/FAIL الفعلي + سجل العيوب المكتشفة والمُصلَّحة |
+| [`Dockerfile`](Dockerfile) · [`docker-compose.yml`](docker-compose.yml) · [`.env.example`](.env.example) | تجميع وتشغيل (PostgreSQL + Redis + FastAPI) — بلا أسرار في الكود، secrets من البيئة فقط |
 
 ## حالة التحقق (2026-09-15)
 
@@ -21,6 +25,21 @@ FastAPI/Node.js **بدون إعادة تفسير التصميم**.
 | صياغة SQL (قواعد PostgreSQL الفعلية) | `pglast` (libpg_query) | ✅ 81 عبارة |
 | FKs / indexes / triggers دلالياً | فحص AST | ✅ 18 FK، 39 index، 12 trigger |
 | **تنفيذ DDL على Postgres فعلي** | PGlite (Postgres/WASM) | ✅ 25 جدولاً + اختبارات: immutability الـaudit، CHECK enums، upsert الـmemory، dedupe الوارد، `updated_at` |
+
+## حالة التنفيذ الفعلي (FastAPI — 2026-09-15)
+
+| البند | النتيجة |
+|---|---|
+| عمليات العقد المنفَّذة | 34/40 (الـ6 مؤجَّلة حسب العقد: getExecution, getEventsStream, listAutomations, deleteAutomation, patchIncident, getNotifications) |
+| نماذج Pydantic | مولَّدة آلياً من `openapi.yaml` (`app/generated/models.py`) — لا تعريف يدوي لما يمكن توليده |
+| الاختبارات | **111/111 ناجحة** على PostgreSQL 16.2 حقيقي (`pytest tests/`) — تفاصيل كاملة في [`docs/build-report.md`](docs/build-report.md) |
+| Docker | Dockerfile + compose مكتوبان ومراجَآن؛ **البناء غير مُتحقق منه** (لا يوجد Docker daemon في بيئة التطوير) |
+
+```bash
+pip install -e '.[dev]'   # داخل venv
+python -m pytest tests/ -q   # postgres مضمَّن عبر pgserver — لا يحتاج تثبيتاً نظامياً
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
 
 ## قرارات مصمَّمة (ثابتة في العقد)
 
