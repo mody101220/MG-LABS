@@ -43,7 +43,7 @@ def test_operation_ids_unique_and_counted():
                 assert "operationId" in op, f"{method} {path} missing operationId"
                 ids.append(op["operationId"])
     assert len(ids) == len(set(ids)), "duplicate operationIds"
-    assert len(ids) == 46, f"expected 46 operations, found {len(ids)}"
+    assert len(ids) == 54, f"expected 54 operations, found {len(ids)}"
 
 
 def test_error_codes_are_exactly_the_fixed_set():

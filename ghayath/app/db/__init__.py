@@ -27,6 +27,7 @@ class DB:
         self.audit = repos.AuditRepository(self)
         self.incidents = repos.IncidentRepository(self)
         self.integrations = repos.IntegrationRepository(self)
+        self.gmail_oauth = repos.GmailOAuthStateRepository(self)
         self.whatsapp = repos.WhatsAppRepository(self)
         self.email = repos.EmailRepository(self)
         self.github = repos.GitHubRepository(self)

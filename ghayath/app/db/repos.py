@@ -503,6 +503,33 @@ class IntegrationRepository(_Repo):
     async def set_status(self, provider: str, status: str) -> None:
         await self.execute("UPDATE integrations SET status = %s, last_checked_at = now() WHERE id = %s", status, provider)
 
+    async def store_config(self, provider: str, encrypted: bytes, status: str = "CONNECTED") -> None:
+        await self.execute(
+            "UPDATE integrations SET config_enc = %s, status = %s, last_checked_at = now() WHERE id = %s",
+            encrypted, status, provider)
+
+    async def clear_config(self, provider: str) -> None:
+        await self.execute(
+            "UPDATE integrations SET config_enc = NULL, status = 'DISCONNECTED', last_checked_at = now() WHERE id = %s",
+            provider)
+
+
+class GmailOAuthStateRepository(_Repo):
+    async def create(self, state_hash: str, user_id: str, expires_at: datetime) -> None:
+        await self.execute(
+            """INSERT INTO gmail_oauth_states (state_hash, user_id, expires_at)
+               VALUES (%s, %s, %s)
+               ON CONFLICT (state_hash) DO UPDATE SET user_id = EXCLUDED.user_id, expires_at = EXCLUDED.expires_at""",
+            state_hash, user_id, expires_at)
+
+    async def consume(self, state_hash: str) -> dict | None:
+        return await self.fetchone(
+            "DELETE FROM gmail_oauth_states WHERE state_hash = %s AND expires_at > now() RETURNING user_id, expires_at",
+            state_hash)
+
+    async def purge_expired(self) -> None:
+        await self.execute("DELETE FROM gmail_oauth_states WHERE expires_at <= now()")
+
 
 # ─────────────────────────── WhatsApp ───────────────────────────
 
@@ -572,6 +599,57 @@ class EmailRepository(_Repo):
             "COALESCE(summary, '') AS summary, required_action, deadline, "
             "COALESCE(received_at, created_at) AS received_at, COALESCE(body, '') AS body, is_read "
             "FROM email_messages WHERE id = %s", id)
+
+    async def upsert_gmail(self, gmail_message_id: str, thread_id: str, sender: str | None,
+                           subject: str | None, body: str | None, priority: str,
+                           classification: str, received_at: datetime | None,
+                           labels: list[str], headers: dict, attachments: list[dict],
+                           snippet: str | None, folder: str = "inbox") -> str:
+        existing = await self.fetchone(
+            "SELECT email_message_id FROM gmail_messages WHERE gmail_message_id = %s", gmail_message_id)
+        email_id = existing["email_message_id"] if existing else new_id("msg")
+        message_row = await self.fetchone(
+            """INSERT INTO email_messages
+               (id, external_id, folder, sender, subject, body, priority, classification, summary, received_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (external_id) DO UPDATE SET folder = EXCLUDED.folder, sender = EXCLUDED.sender,
+                 subject = EXCLUDED.subject, body = EXCLUDED.body, priority = EXCLUDED.priority,
+                 classification = EXCLUDED.classification, summary = EXCLUDED.summary,
+                 received_at = EXCLUDED.received_at
+               RETURNING id""",
+            email_id, gmail_message_id, folder, sender or "unknown@example.com", subject or "",
+            body, priority, classification, snippet or "", received_at)
+        assert message_row is not None
+        email_id = message_row["id"]
+        await self.execute(
+            """INSERT INTO gmail_messages
+               (gmail_message_id, thread_id, email_message_id, labels, headers, attachments, snippet)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (gmail_message_id) DO UPDATE SET thread_id = EXCLUDED.thread_id,
+                 email_message_id = EXCLUDED.email_message_id, labels = EXCLUDED.labels,
+                 headers = EXCLUDED.headers, attachments = EXCLUDED.attachments,
+                 snippet = EXCLUDED.snippet, synced_at = now(), updated_at = now()""",
+            gmail_message_id, thread_id, email_id, J(labels), J(headers), J(attachments), snippet)
+        return email_id
+
+    async def get_gmail_message(self, gmail_message_id: str) -> dict | None:
+        return await self.fetchone(
+            """SELECT e.*, g.thread_id, g.labels, g.headers, g.attachments, g.snippet,
+                      g.gmail_message_id
+               FROM gmail_messages g JOIN email_messages e ON e.id = g.email_message_id
+               WHERE g.gmail_message_id = %s""", gmail_message_id)
+
+    async def get_gmail_thread_messages(self, thread_id: str) -> list[dict]:
+        return await self.fetch(
+            """SELECT e.*, g.thread_id, g.labels, g.headers, g.attachments, g.snippet,
+                      g.gmail_message_id
+               FROM gmail_messages g JOIN email_messages e ON e.id = g.email_message_id
+               WHERE g.thread_id = %s ORDER BY COALESCE(e.received_at, e.created_at), g.gmail_message_id""",
+            thread_id)
+
+    async def last_gmail_sync_at(self) -> datetime | None:
+        row = await self.fetchone("SELECT max(synced_at) AS last_sync_at FROM gmail_messages")
+        return row["last_sync_at"] if row else None
 
     async def create_draft(self, id: str, reply_to: str | None, to_addr: str, subject: str | None, body: str) -> dict | None:
         return await self.fetchone(

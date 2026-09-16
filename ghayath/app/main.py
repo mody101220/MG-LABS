@@ -26,6 +26,7 @@ from app.core.security import hash_password
 from app.db import DB, make_pool
 from app.db.migrate import apply_migrations
 from app.integrations.adapters import EmailAdapter, GitHubAdapter, WhatsAppAdapter
+from app.integrations.gmail import GmailHTTPAdapter
 from app.integrations.llm import OpenAICompatibleLLM
 from app.services.agent_service import AgentService
 from app.services.approval_service import ApprovalService
@@ -37,6 +38,7 @@ from app.services.email_service import EmailService
 from app.services.events import EventBus
 from app.services.execution_service import ExecutionService
 from app.services.github_service import GitHubService
+from app.services.gmail_service import GmailService
 from app.services.idempotency import IdempotencyService
 from app.services.incident_service import IncidentService
 from app.services.memory_service import MemoryService
@@ -96,6 +98,7 @@ def create_app(settings: Settings | None = None, llm=None) -> FastAPI:
 
         tasks = TaskService(db, audit, events, verification_engine)
         email = EmailService(db, settings, adapters["email"], permission_engine, approvals, audit)
+        gmail = GmailService(db, settings, GmailHTTPAdapter(settings), audit)
         whatsapp = WhatsAppService(db, settings, adapters["whatsapp"], permission_engine, approvals, audit, events)
         github = GitHubService(db, adapters["github"], permission_engine, audit)
         memory = MemoryService(db, audit)
@@ -118,6 +121,7 @@ def create_app(settings: Settings | None = None, llm=None) -> FastAPI:
             "memory": memory,
             "whatsapp": whatsapp,
             "email": email,
+            "gmail": gmail,
             "github": github,
             "monitoring": monitoring,
             "automations": automations,
@@ -146,12 +150,13 @@ def create_app(settings: Settings | None = None, llm=None) -> FastAPI:
             await app.state.scheduler.stop()
             for adapter in adapters.values():
                 await adapter.close()
+            await gmail.close()
             await llm_client.close()
             await db.close()
 
     app = FastAPI(
         title="GHAYATH PERSONAL AI — Core API",
-        version="1.0.0",
+        version="1.2.0",
         lifespan=lifespan,
         default_response_class=ZJSONResponse,
     )

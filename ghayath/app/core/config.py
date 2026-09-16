@@ -32,9 +32,18 @@ class Settings(BaseSettings):
     whatsapp_provider_base_url: str | None = None
     whatsapp_provider_token: str | None = None
 
-    # Email provider
+    # Email provider (legacy adapter)
     email_provider_base_url: str | None = None
     email_provider_token: str | None = None
+
+    # Gmail / Google OAuth server-side provider. Client secrets are environment-only.
+    gmail_client_id: str | None = None
+    gmail_client_secret: str | None = None
+    gmail_redirect_uri: str | None = None
+    email_token_encryption_key: str | None = None
+    gmail_api_base_url: str = "https://gmail.googleapis.com/gmail/v1"
+    google_oauth_base_url: str = "https://oauth2.googleapis.com"
+    gmail_oauth_state_ttl_seconds: int = 600
 
     # GitHub
     github_base_url: str = "https://api.github.com"

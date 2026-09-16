@@ -28,7 +28,7 @@ ALL_TABLES = [
     "notifications", "audit_logs", "incidents", "integrations",
     "whatsapp_messages", "email_messages", "email_drafts",
     "github_repositories", "repo_status_snapshots", "github_issues",
-    "memory", "events", "idempotency_keys",
+    "memory", "events", "idempotency_keys", "gmail_oauth_states", "gmail_messages",
 ]
 
 
@@ -45,6 +45,11 @@ def pg():
         from app.db.migrate import load_migration_sql
 
         conn.execute(load_migration_sql())
+    gmail_installed = conn.execute("SELECT to_regclass('public.gmail_oauth_states') IS NOT NULL").fetchone()[0]
+    if not gmail_installed:
+        from app.db.migrate import load_gmail_migration_sql
+
+        conn.execute(load_gmail_migration_sql())
     conn.close()
     yield dsn
     srv.cleanup()
@@ -59,7 +64,8 @@ def _reset(dsn: str) -> None:
             """INSERT INTO integrations (id, provider, permissions) VALUES
                ('whatsapp','whatsapp','{"READ": false, "REPLY": false, "SEND": false, "MEDIA": false}'),
                ('email','email','{"READ": false, "DRAFT": false, "SEND": false, "DELETE": false}'),
-               ('github','github','{"READ": false, "ISSUES": false, "PULL_REQUEST": false, "COMMIT": false, "MERGE": false}')""")
+               ('github','github','{"READ": false, "ISSUES": false, "PULL_REQUEST": false, "COMMIT": false, "MERGE": false}'),
+               ('gmail','gmail','{"READ": true, "SEND": false, "MODIFY": false}')""")
         for uid, email, role in (("usr_owner", OWNER_EMAIL, "OWNER"),
                                   ("usr_agent", AGENT_EMAIL, "AGENT"),
                                   ("usr_viewer", VIEWER_EMAIL, "VIEWER")):

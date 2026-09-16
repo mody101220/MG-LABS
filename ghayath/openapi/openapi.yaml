@@ -2,9 +2,9 @@ openapi: 3.1.0
 
 info:
   title: "GHAYATH PERSONAL AI - Core API"
-  version: "1.1.0"
+  version: "1.2.0"
   description: |
-    REST/JSON API contract for **GHAYATH PERSONAL AI** (v1.1) — a Modular Agentic
+    REST/JSON API contract for **GHAYATH PERSONAL AI** (v1.2) — a Modular Agentic
     Architecture where an autonomous agent monitors and operates the owner's projects,
     inboxes, and communications under strict permission + approval control.
 
@@ -1488,6 +1488,275 @@ paths:
                       details: {}
                     request_id: req_01J9ZK7Q3M4N5P6R7S8T9V
                     timestamp: '2026-09-11T20:00:05Z'
+
+  /integrations/gmail/status:
+    get:
+      tags:
+      - Gmail
+      operationId: gmailStatus
+      summary: Get Gmail connection state
+      responses:
+        '200':
+          description: Gmail connection state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GmailStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /integrations/gmail/oauth/start:
+    get:
+      tags:
+      - Gmail
+      operationId: startGmailOAuth
+      summary: Start server-side Google OAuth authorization
+      description: 'OWNER-only. Returns a Google authorization URL using the read-only
+
+        gmail.readonly scope. Client secrets never leave the server.
+
+        '
+      responses:
+        '200':
+          description: Authorization URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GmailOAuthStartResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
+
+  /integrations/gmail/oauth/callback:
+    get:
+      tags:
+      - Gmail
+      operationId: completeGmailOAuth
+      summary: Complete server-side Google OAuth authorization
+      description: 'Public redirect endpoint. The one-time state is bound server-side
+        to
+
+        the initiating OWNER and is consumed exactly once. No token is returned.
+
+        '
+      security: []
+      parameters:
+      - name: state
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: code
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: error
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: error_description
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OAuth result without tokens
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GmailOAuthCallbackResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
+
+  /integrations/gmail/messages:
+    get:
+      tags:
+      - Gmail
+      operationId: listGmailMessages
+      summary: List Gmail messages with provider pagination
+      parameters:
+      - name: page_token
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: max_results
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+      - name: q
+        in: query
+        required: false
+        description: Gmail search query passed to the provider unchanged
+        schema:
+          type: string
+      - name: label_ids
+        in: query
+        required: false
+        description: Comma-separated Gmail label ids
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Gmail message page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GmailMessageListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
+
+  /integrations/gmail/messages/{message_id}:
+    get:
+      tags:
+      - Gmail
+      operationId: getGmailMessage
+      summary: Get a Gmail message with metadata and body
+      parameters:
+      - name: message_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: format
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - minimal
+          - full
+          - raw
+          - metadata
+          default: full
+      responses:
+        '200':
+          description: Gmail message
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GmailMessageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
+
+  /integrations/gmail/threads/{thread_id}:
+    get:
+      tags:
+      - Gmail
+      operationId: getGmailThread
+      summary: Get a Gmail thread
+      parameters:
+      - name: thread_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: format
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - minimal
+          - full
+          - raw
+          - metadata
+          default: full
+      responses:
+        '200':
+          description: Gmail thread
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GmailThreadResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
+
+  /integrations/gmail/revoke:
+    post:
+      tags:
+      - Gmail
+      operationId: revokeGmail
+      summary: Revoke Gmail OAuth credentials and disconnect the provider
+      description: 'OWNER-only. The server revokes the stored refresh token at Google,
+
+        then removes the encrypted server-side token. Idempotency-Key is required.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      responses:
+        '200':
+          description: Gmail disconnected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GmailRevokeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
+
+  /integrations/gmail/sync:
+    post:
+      tags:
+      - Gmail
+      operationId: syncGmail
+      summary: Incrementally import a Gmail page into the unified inbox
+      description: 'Reads provider pages and upserts by the original Gmail messageId.
+
+        It never claims a provider write or delivery. Idempotency-Key is required
+
+        for retry-safe page imports.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GmailSyncRequest'
+      responses:
+        '200':
+          description: Imported Gmail page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GmailSyncResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/IntegrationOffline'
 
   # ─────────────────────────── AUTOMATIONS ───────────────────────────
 
@@ -4759,3 +5028,353 @@ components:
             type: array
             items:
               $ref: '#/components/schemas/NotificationView'
+
+    # ─────────── v1.2 Gmail schemas ───────────
+    GmailConnectionState:
+      type: string
+      enum:
+      - CONNECTED
+      - DISCONNECTED
+      - REQUIRES_CONNECTION
+      - DEGRADED
+
+    GmailStatusData:
+      type: object
+      required:
+      - provider
+      - state
+      - scopes
+      properties:
+        provider:
+          type: string
+          enum:
+          - gmail
+        state:
+          $ref: '#/components/schemas/GmailConnectionState'
+        email:
+          type:
+          - string
+          - 'null'
+          format: email
+        scopes:
+          type: array
+          items:
+            type: string
+        expires_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        last_sync_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+
+    GmailStatusResponse:
+      allOf:
+      - $ref: '#/components/schemas/SuccessEnvelope'
+      - type: object
+        required:
+        - data
+        properties:
+          data:
+            $ref: '#/components/schemas/GmailStatusData'
+
+    GmailOAuthStartData:
+      type: object
+      required:
+      - authorization_url
+      - expires_at
+      properties:
+        authorization_url:
+          type: string
+          format: uri
+        expires_at:
+          type: string
+          format: date-time
+
+    GmailOAuthStartResponse:
+      allOf:
+      - $ref: '#/components/schemas/SuccessEnvelope'
+      - type: object
+        required:
+        - data
+        properties:
+          data:
+            $ref: '#/components/schemas/GmailOAuthStartData'
+
+    GmailOAuthCallbackData:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          enum:
+          - CONNECTED
+          - FAILED
+        email:
+          type:
+          - string
+          - 'null'
+          format: email
+
+    GmailOAuthCallbackResponse:
+      allOf:
+      - $ref: '#/components/schemas/SuccessEnvelope'
+      - type: object
+        required:
+        - data
+        properties:
+          data:
+            $ref: '#/components/schemas/GmailOAuthCallbackData'
+
+    GmailAttachment:
+      type: object
+      required:
+      - filename
+      - mime_type
+      - size
+      properties:
+        filename:
+          type: string
+        mime_type:
+          type: string
+        size:
+          type: integer
+          minimum: 0
+        attachment_id:
+          type:
+          - string
+          - 'null'
+
+    GmailIntelligence:
+      type: object
+      required:
+      - channel
+      - identity_status
+      properties:
+        channel:
+          type: string
+          enum:
+          - EMAIL
+        intent:
+          type: string
+        priority:
+          type: string
+        status:
+          type: string
+        related_project:
+          type: string
+        related_customer:
+          type: string
+        next_action:
+          type: string
+        deadline:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        identity_status:
+          type: string
+          enum:
+          - VERIFIED
+          - IDENTITY_UNVERIFIED
+          - UNKNOWN
+        contact_id:
+          type:
+          - string
+          - 'null'
+        crm_id:
+          type:
+          - string
+          - 'null'
+
+    GmailMessageData:
+      type: object
+      required:
+      - message_id
+      - thread_id
+      - sender
+      - recipients
+      - subject
+      - timestamp
+      - labels
+      - snippet
+      - body
+      - attachments
+      - intelligence
+      properties:
+        message_id:
+          type: string
+        thread_id:
+          type: string
+        sender:
+          type:
+          - string
+          - 'null'
+        recipients:
+          type: array
+          items:
+            type: string
+        subject:
+          type:
+          - string
+          - 'null'
+        timestamp:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        labels:
+          type: array
+          items:
+            type: string
+        snippet:
+          type:
+          - string
+          - 'null'
+        body:
+          type:
+          - string
+          - 'null'
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/GmailAttachment'
+        intelligence:
+          $ref: '#/components/schemas/GmailIntelligence'
+
+    GmailMessagePage:
+      type: object
+      required:
+      - messages
+      - next_page_token
+      - result_size_estimate
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/GmailMessageData'
+        next_page_token:
+          type:
+          - string
+          - 'null'
+        result_size_estimate:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+
+    GmailMessageListResponse:
+      allOf:
+      - $ref: '#/components/schemas/SuccessEnvelope'
+      - type: object
+        required:
+        - data
+        properties:
+          data:
+            $ref: '#/components/schemas/GmailMessagePage'
+
+    GmailMessageResponse:
+      allOf:
+      - $ref: '#/components/schemas/SuccessEnvelope'
+      - type: object
+        required:
+        - data
+        properties:
+          data:
+            $ref: '#/components/schemas/GmailMessageData'
+
+    GmailThreadData:
+      type: object
+      required:
+      - thread_id
+      - messages
+      properties:
+        thread_id:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/GmailMessageData'
+
+    GmailThreadResponse:
+      allOf:
+      - $ref: '#/components/schemas/SuccessEnvelope'
+      - type: object
+        required:
+        - data
+        properties:
+          data:
+            $ref: '#/components/schemas/GmailThreadData'
+
+    GmailRevokeData:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          enum:
+          - DISCONNECTED
+    GmailRevokeResponse:
+      allOf:
+      - $ref: '#/components/schemas/SuccessEnvelope'
+      - type: object
+        required:
+        - data
+        properties:
+          data:
+            $ref: '#/components/schemas/GmailRevokeData'
+
+    GmailSyncRequest:
+      type: object
+      properties:
+        page_token:
+          type:
+          - string
+          - 'null'
+        max_results:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+        q:
+          type:
+          - string
+          - 'null'
+
+    GmailSyncData:
+      type: object
+      required:
+      - imported_count
+      - skipped_count
+      - next_page_token
+      - messages
+      properties:
+        imported_count:
+          type: integer
+          minimum: 0
+        skipped_count:
+          type: integer
+          minimum: 0
+        next_page_token:
+          type:
+          - string
+          - 'null'
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/GmailMessageData'
+
+    GmailSyncResponse:
+      allOf:
+      - $ref: '#/components/schemas/SuccessEnvelope'
+      - type: object
+        required:
+        - data
+        properties:
+          data:
+            $ref: '#/components/schemas/GmailSyncData'

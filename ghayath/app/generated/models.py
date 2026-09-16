@@ -1778,3 +1778,147 @@ class NotificationView(BaseModel):
 
 class EnvelopeNotificationList(SuccessEnvelope):
     data: list[NotificationView] | None = None
+
+
+class GmailConnectionState(Enum):
+    CONNECTED = 'CONNECTED'
+    DISCONNECTED = 'DISCONNECTED'
+    REQUIRES_CONNECTION = 'REQUIRES_CONNECTION'
+    DEGRADED = 'DEGRADED'
+
+
+class Provider2(Enum):
+    gmail = 'gmail'
+
+
+class GmailStatusData(BaseModel):
+    provider: Provider2
+    state: GmailConnectionState
+    email: EmailStr | None = None
+    scopes: list[str]
+    expires_at: AwareDatetime | None = None
+    last_sync_at: AwareDatetime | None = None
+
+
+class GmailStatusResponse(SuccessEnvelope):
+    data: GmailStatusData
+
+
+class GmailOAuthStartData(BaseModel):
+    authorization_url: AnyUrl
+    expires_at: AwareDatetime
+
+
+class GmailOAuthStartResponse(SuccessEnvelope):
+    data: GmailOAuthStartData
+
+
+class Status19(Enum):
+    CONNECTED = 'CONNECTED'
+    FAILED = 'FAILED'
+
+
+class GmailOAuthCallbackData(BaseModel):
+    status: Status19
+    email: EmailStr | None = None
+
+
+class GmailOAuthCallbackResponse(SuccessEnvelope):
+    data: GmailOAuthCallbackData
+
+
+class GmailAttachment(BaseModel):
+    filename: str
+    mime_type: str
+    size: Annotated[int, Field(ge=0)]
+    attachment_id: str | None = None
+
+
+class Channel1(Enum):
+    EMAIL = 'EMAIL'
+
+
+class IdentityStatus(Enum):
+    VERIFIED = 'VERIFIED'
+    IDENTITY_UNVERIFIED = 'IDENTITY_UNVERIFIED'
+    UNKNOWN = 'UNKNOWN'
+
+
+class GmailIntelligence(BaseModel):
+    channel: Channel1
+    intent: str | None = None
+    priority: str | None = None
+    status: str | None = None
+    related_project: str | None = None
+    related_customer: str | None = None
+    next_action: str | None = None
+    deadline: AwareDatetime | None = None
+    identity_status: IdentityStatus
+    contact_id: str | None = None
+    crm_id: str | None = None
+
+
+class GmailMessageData(BaseModel):
+    message_id: str
+    thread_id: str
+    sender: str | None = None
+    recipients: list[str]
+    subject: str | None = None
+    timestamp: AwareDatetime | None = None
+    labels: list[str]
+    snippet: str | None = None
+    body: str | None = None
+    attachments: list[GmailAttachment]
+    intelligence: GmailIntelligence
+
+
+class GmailMessagePage(BaseModel):
+    messages: list[GmailMessageData]
+    next_page_token: str | None = None
+    result_size_estimate: Annotated[int | None, Field(ge=0)] = None
+
+
+class GmailMessageListResponse(SuccessEnvelope):
+    data: GmailMessagePage
+
+
+class GmailMessageResponse(SuccessEnvelope):
+    data: GmailMessageData
+
+
+class GmailThreadData(BaseModel):
+    thread_id: str
+    messages: list[GmailMessageData]
+
+
+class GmailThreadResponse(SuccessEnvelope):
+    data: GmailThreadData
+
+
+class Status20(Enum):
+    DISCONNECTED = 'DISCONNECTED'
+
+
+class GmailRevokeData(BaseModel):
+    status: Status20
+
+
+class GmailRevokeResponse(SuccessEnvelope):
+    data: GmailRevokeData
+
+
+class GmailSyncRequest(BaseModel):
+    page_token: str | None = None
+    max_results: Annotated[int | None, Field(ge=1, le=100)] = 50
+    q: str | None = None
+
+
+class GmailSyncData(BaseModel):
+    imported_count: Annotated[int, Field(ge=0)]
+    skipped_count: Annotated[int, Field(ge=0)]
+    next_page_token: str | None = None
+    messages: list[GmailMessageData]
+
+
+class GmailSyncResponse(SuccessEnvelope):
+    data: GmailSyncData

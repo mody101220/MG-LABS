@@ -14,7 +14,7 @@ import pytest
 from app.db import make_pool
 from app.db.migrate import apply_migrations
 
-TABLE_COUNT = 25
+TABLE_COUNT = 27  # 25 authoritative base tables + gmail_oauth_states + gmail_messages
 
 
 async def test_migration_applies_cleanly_and_idempotently(pg):

@@ -1,7 +1,7 @@
-# GHAYATH PERSONAL AI — Database Schema (v1.0)
+# GHAYATH PERSONAL AI — Database Schema (v1.2)
 
 **قاعدة البيانات:** PostgreSQL 14+
-**الملف المنفَّذ:** [`../sql/001_init.sql`](../sql/001_init.sql) (81 عبارة، مُتحقَّق منه على Postgres فعلي)
+**الملفات المنفَّذة:** [`../sql/001_init.sql`](../sql/001_init.sql) authoritative base + [`../sql/002_gmail_oauth.sql`](../sql/002_gmail_oauth.sql) additive Gmail migration، مُتحقَّقان على Postgres فعلي.
 **العقد المرتبط:** [`openapi.yaml`](../openapi/openapi.yaml)
 
 ---
@@ -25,7 +25,7 @@
 | 13 | `notifications` | الإشعارات + القنوات التي رُوتيت إليها | `notf_` |
 | 14 | `audit_logs` | **السجل غير القابل للتعديل** | identity |
 | 15 | `incidents` | الحوادث الطارئة | `inc_` |
-| 16 | `integrations` | حالة/أذونات مزوّدي الخدمات (3 صفوف ثابتة) | slug |
+| 16 | `integrations` | حالة/أذونات مزوّدي الخدمات (4 صفوف بعد migration 002، منها Gmail) | slug |
 | 17 | `whatsapp_messages` | رسائل الواتساب (داخل/خارج) + تصنيف | `wmsg_` |
 | 18 | `email_messages` | البريد + تحليل الـAgent | `msg_` |
 | 19 | `email_drafts` | المسودات (لا تُرسل إلا عبر `/email/send`) | `draft_` |
@@ -35,6 +35,8 @@
 | 23 | `memory` | الذاكرة الدائمة المهيكلة | `mem_` |
 | 24 | `events` | سجل الـEvent Bus الداخلي (append-only) | `evt_` |
 | 25 | `idempotency_keys` | أمان الإعادة (24 ساعة) | مركّب |
+| 26 | `gmail_oauth_states` | OAuth state hash one-time، مربوط بالمستخدم وTTL | SHA-256 |
+| 27 | `gmail_messages` | mapping Gmail `messageId`/`threadId` إلى unified inbox + metadata | provider id |
 
 ## 2. اتفاقيات
 
@@ -65,7 +67,7 @@
 | notifications.status | `QUEUED, SENT, FAILED, DISMISSED` |
 | audit_logs.result | `SUCCESS, FAILURE, DENIED, TIMEOUT` |
 | incidents.status | `OPEN, INVESTIGATING, MITIGATED, RESOLVED, CLOSED` |
-| integrations.status | `CONNECTED, DISCONNECTED, DEGRADED, EXPIRED` |
+| integrations.status | `CONNECTED, DISCONNECTED, DEGRADED, EXPIRED` (Gmail API exposes `REQUIRES_CONNECTION` when no usable token exists) |
 | whatsapp.status | `QUEUED, SENT, DELIVERED, READ, FAILED` |
 | classification (واتساب/بريد) | `PERSONAL, BUSINESS, CLIENT, PROJECT, URGENT, SPAM, UNKNOWN` |
 | email.priority | `LOW, NORMAL, HIGH, URGENT` |
@@ -80,7 +82,17 @@
 `agent_commands.plan`, `automations.trigger/action`, `verifications.checks`,
 `events.payload`, `memory.value`, `integrations.permissions`, `idempotency_keys.response_body`.
 
-## 3. الثوابت المعمارية (مُطبَّقة في DDL)
+## 3.1 Gmail migration boundary
+
+`001_init.sql` remains unchanged and authoritative for the core model. Migration
+`002_gmail_oauth.sql` adds only the missing Gmail integration structures: the
+hashed one-time OAuth state and the `gmail_messages` mapping keyed by the
+original provider `messageId`. OAuth access/refresh tokens are encrypted in the
+existing `integrations.config_enc` BYTEA; no plaintext token is stored in these
+new tables. Gmail sync upserts `email_messages` and `gmail_messages` so retries
+are safe and provider IDs remain recoverable.
+
+## 4. الثوابت المعمارية (مُطبَّقة في DDL)
 
 ### 3.1 Audit Log غير قابل للتعديل
 طبقتان:
@@ -107,7 +119,7 @@
 `events` هو سجل دائم للـBus (append-only عملياً) — مصادر/مستهلكون داخليون (Scheduler, Agent, Notification Router).
 **لا يوجد endpoint HTTP للأحداث في v1** — الوصول عبر `/audit`, `/brief/daily`, والإشعارات.
 
-## 4. الأدوار والأذونات (يُنفَّذ وقت الـdeployment)
+## 5. الأدوار والأذونات (يُنفَّذ وقت الـdeployment)
 
 | الدور | الصلاحيات |
 |---|---|
@@ -116,12 +128,12 @@
 
 مكتوب جاهزاً (معلَّق) في نهاية `001_init.sql`.
 
-## 5. Migrations مستقبلاً
+## 6. Migrations مستقبلاً
 - ابدأ بـ`001_init.sql` (هذا الملف).
 - كل تغيير: `002_xxx.sql` — لا تُعدَّل الـ001 بعد الـdeploy.
 - القوامات CHECK → تغييرها migration عادي (DROP/ADD CONSTRAINT).
 
-## 6. ملاحظات أداء
+## 7. ملاحظات أداء
 - الفلاتر الشائعة كلها مؤشَّرة: `tasks (project_id, status, priority, assignee, due_at)`, `audit_logs (project_id, occurred_at, action, actor, execution_id)`, `events (event, occurred_at)`, `email_messages (folder, received_at)`.
 - `repo_status_snapshots` يقدَّم بآخر صف لكل repo (استعلام `DISTINCT ON` بسيط).
 - `events` و`audit_logs` سيقبلان نمواً كبيراً — خطّط partitioning حسب الشهر في v1.x إن لزم (لا يغيّر العقد).
